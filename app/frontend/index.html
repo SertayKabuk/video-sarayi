@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Video Sarayi</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+</head>
+<body>
+  <header>
+    <h1>Video Sarayi</h1>
+    <div id="health" class="health"></div>
+  </header>
+
+  <main>
+    <section class="pane" id="pane-inputs">
+      <div class="pane-head">
+        <h2>Inputs</h2>
+        <button id="btn-refresh-inputs" class="ghost">Refresh</button>
+      </div>
+      <p class="hint">Drop source files into <code>input/</code>.</p>
+      <ul id="file-list" class="file-list"></ul>
+    </section>
+
+    <section class="pane" id="pane-convert">
+      <div class="pane-head">
+        <h2>Convert</h2>
+      </div>
+
+      <label class="field">
+        <span>Selected file</span>
+        <div id="selected-file" class="selected">(pick a file on the left)</div>
+      </label>
+
+      <div class="cam-plat-row">
+        <label class="field" style="flex:1;margin:0">
+          <span>Camera</span>
+          <select id="camera">
+            <option value="x5">Insta360 X5</option>
+            <option value="a6">DJI Osmo Action 6</option>
+          </select>
+        </label>
+        <label class="field" style="flex:1;margin:0">
+          <span>Target platform</span>
+          <select id="platform">
+            <option value="reel">Instagram Reel</option>
+            <option value="yt">YouTube 4K</option>
+          </select>
+        </label>
+      </div>
+      <!-- derived pipeline id, kept hidden for JS use -->
+      <input type="hidden" id="pipeline" value="x5-reel" />
+
+      <div class="preset-bar">
+        <label class="field" style="flex:1; margin:0;">
+          <span>Preset</span>
+          <select id="preset"></select>
+        </label>
+        <div class="preset-actions">
+          <button id="btn-preset-save-as" class="ghost" title="Save current params as a new preset">Save as…</button>
+          <button id="btn-preset-save" class="ghost" disabled title="Overwrite selected user preset">Save</button>
+          <button id="btn-preset-duplicate" class="ghost">Duplicate</button>
+          <button id="btn-preset-delete" class="ghost" disabled>Delete</button>
+        </div>
+      </div>
+
+      <div id="params-form" class="params-form"></div>
+
+      <fieldset class="group">
+        <legend>
+          <label><input type="checkbox" id="override-toggle" /> Edit ffmpeg command directly</label>
+        </legend>
+        <textarea id="argv-override" class="raw" rows="14" hidden placeholder="One argv token per line…"></textarea>
+        <pre id="argv-preview" class="argv"></pre>
+      </fieldset>
+
+      <button id="btn-convert" class="primary" disabled>Convert</button>
+      <div id="convert-error" class="error" hidden></div>
+    </section>
+
+    <section class="pane pane-wide" id="pane-jobs">
+      <div class="pane-head">
+        <h2>Jobs</h2>
+      </div>
+      <ul id="job-list" class="job-list"></ul>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

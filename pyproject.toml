@@ -1,0 +1,24 @@
+[project]
+name = "video-sarayi"
+version = "0.1.0"
+description = "Local web UI for converting action-cam footage to social-media-ready master files via FFmpeg."
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.136",
+    "uvicorn[standard]>=0.44",
+    "pydantic>=2.13.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0.3"]
+
+[build-system]
+requires = ["setuptools>=82"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
