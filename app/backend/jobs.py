@@ -274,23 +274,76 @@ class JobManager:
             return max(1, round(duration_s * fps))
         return None
 
+    async def _run_gyroflow(
+        self, state: _JobState, input_path: Path, smoothness: float
+    ) -> Path | None:
+        """Run Gyroflow stabilization; returns temp output path or None on failure."""
+        gf = self.config.gyroflow
+        if not gf:
+            state.publish({"type": "log", "line": "[gyroflow] not installed — skipping stabilization"})
+            return None
+
+        job = state.job
+        tmp_suffix = f"_gftmp_{job.id[:8]}"
+        tmp_path = input_path.parent / f"{input_path.stem}{tmp_suffix}{input_path.suffix}"
+        _safe_unlink(tmp_path)
+
+        gf_argv = [gf, str(input_path), "-t", tmp_suffix, "-f",
+                   "-p", f"{{'smoothness': {smoothness}, 'codec': 'H.265/HEVC', 'use_gpu': true, 'bitrate': 300}}"]
+        state.publish({"type": "log", "line": f"[gyroflow] stabilizing (smoothness={smoothness})…"})
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *gf_argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            state.proc = proc
+            _out, err = await proc.communicate()
+            for line in err.decode("utf-8", errors="replace").splitlines():
+                if line.strip():
+                    state.publish({"type": "log", "line": f"[gyroflow] {line}"})
+            if proc.returncode != 0 or not tmp_path.exists():
+                state.publish({"type": "log", "line": "[gyroflow] failed — encoding original file"})
+                _safe_unlink(tmp_path)
+                return None
+            state.publish({"type": "log", "line": f"[gyroflow] done → {tmp_path.name}"})
+            return tmp_path
+        except FileNotFoundError:
+            state.publish({"type": "log", "line": "[gyroflow] binary not found — skipping"})
+            return None
+
     async def _run_job(self, state: _JobState) -> None:
         job = state.job
         job.duration_s = await self._probe_duration(job.input_path)
         job.total_frames = await self._probe_total_frames(job.input_path, job.duration_s)
 
-        if job.argv_override:
-            job.argv = list(job.argv_override)
-        else:
+        gyroflow_tmp: Path | None = None
+        ffmpeg_input = job.input_path
+
+        if not job.argv_override:
+            params = PipelineParams.from_dict(job.params)
+
+            if params.gyroflow_enabled and job.pipeline.startswith("a6"):
+                job.status = Status.RUNNING
+                state.publish({"type": "status", "job": job.serialize()})
+                gyroflow_tmp = await self._run_gyroflow(state, job.input_path, params.gyroflow_smoothness)
+                if gyroflow_tmp:
+                    ffmpeg_input = gyroflow_tmp
+                    job.duration_s = await self._probe_duration(ffmpeg_input) or job.duration_s
+                    job.total_frames = await self._probe_total_frames(ffmpeg_input, job.duration_s) or job.total_frames
+
             ctx = BuildContext(
-                input_path=job.input_path,
+                input_path=ffmpeg_input,
                 output_path=job.output_path,
                 x5_lut=self.config.x5_lut,
                 dji_lut=self.config.dji_lut,
                 ffmpeg=self.config.ffmpeg,
             )
-            params = PipelineParams(**job.params)
             job.argv = build(job.pipeline, params, ctx)
+        else:
+            job.argv = list(job.argv_override)
+
         job.status = Status.RUNNING
         state.publish({"type": "status", "job": job.serialize()})
 
@@ -306,6 +359,9 @@ class JobManager:
 
         rc = await proc.wait()
         await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+
+        if gyroflow_tmp:
+            _safe_unlink(gyroflow_tmp)
 
         if state.cancel_requested:
             job.status = Status.CANCELED

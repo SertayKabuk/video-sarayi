@@ -14,6 +14,41 @@
   </header>
 
   <main>
+    <details class="tips-panel" id="tips-panel">
+      <summary>Prep tips — before you drop files here</summary>
+      <div class="tips-body">
+
+        <div class="tips-cam">
+          <h3>Insta360 X5 &rarr; Insta360 Studio</h3>
+          <ol>
+            <li><strong>Reframe in Studio.</strong> Drag to set your perspective (yaw / pitch / FOV). This is the only place you can do it — Video Sarayi encodes the flat output you export.</li>
+            <li><strong>Stabilization.</strong> Enable <em>FlowState</em> in Studio. It's the best stabilizer for the X5.</li>
+            <li><strong>Color profile: keep I-Log.</strong> In export settings choose <em>I-Log</em> (not "Standard" / "Vivid"). Video Sarayi applies the I-Log → Rec.709 LUT during encoding. Baking it in Studio too will double-apply the grade and blow out highlights.</li>
+            <li><strong>Export codec.</strong> Use the highest-quality option available — ProRes 422 HQ on Mac, or the Studio "High" H.264/H.265 export at maximum bitrate on Windows. Avoid the social-media presets.</li>
+            <li><strong>Resolution.</strong> Export at the native stitched resolution (5.7K or 4K). Video Sarayi scales down for Reels; keep it large for YouTube.</li>
+          </ol>
+        </div>
+
+        <div class="tips-cam">
+          <h3>DJI Osmo Action 6 &rarr; DaVinci Resolve</h3>
+          <ol>
+            <li><strong>Do your edit here.</strong> Cuts, sync to music, trimming — everything creative goes in Resolve.</li>
+            <li><strong>Color profile: keep D-LogM.</strong> Do <em>not</em> apply the DJI D-LogM → Rec.709 LUT in Resolve. Video Sarayi applies it during encoding. Applying it twice destroys contrast.</li>
+            <li><strong>No color grading yet.</strong> Leave the timeline in log. Any exposure or grade adjustments should wait until after encoding, or be handled in a second Resolve pass on the final file.</li>
+            <li><strong>Export codec — depends on stabilization:</strong>
+              <ul style="margin:6px 0 0; padding-left:16px; display:flex; flex-direction:column; gap:5px;">
+                <li><em>Not using Gyroflow:</em> export DNxHR HQ or ProRes 422 HQ. These go straight into FFmpeg with no intermediate re-encode, so lossless-ish quality matters.</li>
+                <li><em>Using Gyroflow:</em> export H.265 at the highest bitrate DaVinci allows (200 Mbps+). Gyroflow will re-encode your file anyway, so ProRes is wasted — a high-bitrate H.265 is just as clean after the intermediate step.</li>
+              </ul>
+            </li>
+            <li><strong>Stabilization.</strong> DaVinci's built-in stabilizer works fine. Alternatively, enable <em>Gyroflow</em> in Video Sarayi (Stabilization section) — it uses the embedded IMU data for smoother results than optical-flow methods.</li>
+            <li><strong>Resolution.</strong> Export at native 4K. Keep the original frame rate.</li>
+          </ol>
+        </div>
+
+      </div>
+    </details>
+
     <section class="pane" id="pane-inputs">
       <div class="pane-head">
         <h2>Inputs</h2>

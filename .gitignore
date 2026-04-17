@@ -59,5 +59,8 @@ profile.json.gz
 .env
 .env.*
 !.env.example
-/ffmpeg/bin/*
-!/ffmpeg/bin/README
+/libs/ffmpeg/**
+!/libs/ffmpeg/bin/
+!/libs/ffmpeg/bin/README
+/libs/Gyroflow-windows64/*
+!/libs/Gyroflow-windows64/README

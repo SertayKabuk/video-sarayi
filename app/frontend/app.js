@@ -48,6 +48,17 @@ const PARAM_GROUPS = [
     ],
   },
   {
+    label: "Stabilization (Gyroflow)",
+    when: (t) => t.lut === "dji",
+    grid: "cols-2",
+    fields: [
+      { key: "gyroflow_enabled", label: "Enable Gyroflow stabilization", type: "checkbox",
+        hint: "Requires Gyroflow installed. Runs as a pre-processing step before encoding." },
+      { key: "gyroflow_smoothness", label: "Smoothness", type: "number", step: 0.05, min: 0, max: 1,
+        hint: "0 = no smoothing, 1 = maximum. Default 0.5." },
+    ],
+  },
+  {
     label: "LUT",
     grid: "cols-2",
     fields: [
@@ -208,7 +219,7 @@ async function loadInputs() {
 async function loadJobs() {
   const r = await fetch("/api/jobs").then((r) => r.json());
   for (const j of r.jobs) {
-    if (!S.jobs.has(j.id)) S.jobs.set(j.id, { data: j, logs: [], socket: null });
+    if (!S.jobs.has(j.id)) S.jobs.set(j.id, { data: j, logs: [], socket: null, logOpen: false });
     else S.jobs.get(j.id).data = j;
     if (j.status === "queued" || j.status === "running") openSocket(j.id);
   }
@@ -225,7 +236,7 @@ function wireEvents() {
     const newPipeline = derivePipeline($("#camera").value, $("#platform").value);
     $("#pipeline").value = newPipeline;
     S.currentPipeline = newPipeline;
-    selectBestPreset(newPipeline);   // auto-pick research defaults for this pipeline
+    selectBestPreset(newPipeline);
     renderPresetDropdown();
     renderParamsForm();
     schedulePreview();
@@ -357,6 +368,7 @@ function renderParamsForm() {
 
     container.appendChild(fs);
   }
+
 }
 
 function updateFormFromParams() {
@@ -523,6 +535,14 @@ function selectFile(name) {
   $("#selected-file").classList.add("has-file");
   for (const li of document.querySelectorAll("#file-list li"))
     li.classList.toggle("selected", li.dataset.name === name);
+
+  const cam = $("#camera");
+  const detectedCam = /^dji/i.test(name) ? "a6" : "x5";
+  if (cam.value !== detectedCam) {
+    cam.value = detectedCam;
+    cam.dispatchEvent(new Event("change"));
+  }
+
   $("#btn-convert").disabled = false;
   schedulePreview();
 }
@@ -557,7 +577,7 @@ async function submitJob() {
       throw new Error(payload.error || r.statusText);
     }
     const job = await r.json();
-    S.jobs.set(job.id, { data: job, logs: [], socket: null });
+    S.jobs.set(job.id, { data: job, logs: [], socket: null, logOpen: false });
     openSocket(job.id);
     renderJobs();
   } catch (e) {
@@ -599,7 +619,10 @@ function renderJobs() {
     ul.innerHTML = `<li style="color:var(--muted); font-size:12px">No jobs yet.</li>`;
     return;
   }
-  for (const id of ids) ul.appendChild(renderJob(S.jobs.get(id)));
+  for (const id of ids) {
+    ul.appendChild(renderJob(S.jobs.get(id)));
+    if (S.jobs.get(id).logOpen) updateLog(id);
+  }
 }
 
 function renderJob(entry) {
@@ -627,7 +650,7 @@ function renderJob(entry) {
     <div class="bar"><div style="width:${pct}%"></div></div>
     <div class="metrics">${metrics || "&nbsp;"}</div>
     ${j.error ? `<div class="error" style="margin-top:8px">${escHtml(j.error)}</div>` : ""}
-    <div class="log" id="log-${j.id}" hidden></div>`;
+    <div class="log" id="log-${j.id}"${entry.logOpen ? "" : " hidden"}></div>`;
 
   const actions = li.querySelector(".job-actions");
 
@@ -635,9 +658,10 @@ function renderJob(entry) {
   toggleLog.className = "ghost";
   toggleLog.textContent = "Log";
   toggleLog.addEventListener("click", () => {
+    entry.logOpen = !entry.logOpen;
     const log = li.querySelector(".log");
-    log.hidden = !log.hidden;
-    if (!log.hidden) updateLog(j.id);
+    log.hidden = !entry.logOpen;
+    if (entry.logOpen) updateLog(j.id);
   });
   actions.appendChild(toggleLog);
 
@@ -654,6 +678,13 @@ function renderJob(entry) {
     a.textContent = "Download";
     a.target = "_blank"; a.rel = "noopener";
     actions.appendChild(a);
+
+    const video = document.createElement("video");
+    video.controls = true;
+    video.preload = "metadata";
+    video.src = `/output/${encodeURIComponent(j.output)}`;
+    video.style.cssText = "display:block;width:100%;max-height:320px;margin-top:10px;border-radius:6px;border:1px solid var(--line);background:#000";
+    li.appendChild(video);
   }
   return li;
 }
@@ -688,5 +719,8 @@ function fmtDuration(sec) {
 
 const ESC = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":'&#39;' };
 function escHtml(s) { return String(s).replace(/[&<>"']/g, c => ESC[c]); }
+
+
+
 
 boot();

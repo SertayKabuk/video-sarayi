@@ -19,26 +19,42 @@ class Config:
     dji_lut: Path
     ffmpeg: str
     ffprobe: str
+    gyroflow: str | None
 
 
 def _resolve_binary(env: str, name: str, root: Path) -> str:
-    """Prefer env override, then the bundled `ffmpeg/bin/` next to the repo,
-    then whatever is on PATH."""
     override = os.environ.get(env)
     if override:
         return override
-    bundled = root / "ffmpeg" / "bin" / f"{name}.exe"
-    if bundled.exists():
-        return str(bundled)
-    bundled_nix = root / "ffmpeg" / "bin" / name
-    if bundled_nix.exists():
-        return str(bundled_nix)
+    for candidate in (
+        root / "libs" / "ffmpeg" / "bin" / f"{name}.exe",
+        root / "libs" / "ffmpeg" / "bin" / name,
+    ):
+        if candidate.exists():
+            return str(candidate)
     return shutil.which(name) or name
+
+
+def _resolve_gyroflow(root: Path) -> str | None:
+    override = os.environ.get("GYROFLOW")
+    if override:
+        return override
+    for candidate in (
+        root / "libs" / "Gyroflow-windows64" / "Gyroflow.exe",
+        root / "libs" / "gyroflow" / "Gyroflow.exe",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    for name in ("Gyroflow", "gyroflow"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
 
 def load() -> Config:
     root = Path(os.environ.get("VIDEO_SARAYI_ROOT", REPO_ROOT))
-    lut_dir = root / "lut"
+    lut_dir = root / "luts"
     return Config(
         repo_root=root,
         input_dir=root / "input",
@@ -48,4 +64,5 @@ def load() -> Config:
         dji_lut=lut_dir / "DJI OSMO Action 6 D-LogM to Rec.709 LUT-11.17.cube",
         ffmpeg=_resolve_binary("FFMPEG", "ffmpeg", root),
         ffprobe=_resolve_binary("FFPROBE", "ffprobe", root),
+        gyroflow=_resolve_gyroflow(root),
     )

@@ -73,6 +73,17 @@ def ensure_dirs(c: cfg.Config) -> Check:
     )
 
 
+def check_gyroflow(binary: str | None) -> Check:
+    if not binary:
+        return Check("gyroflow", True, "not found — DJI stabilization disabled")
+    try:
+        result = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
+        ver = (result.stdout + result.stderr).strip().splitlines()[0][:80]
+        return Check("gyroflow", True, ver or "found")
+    except (FileNotFoundError, subprocess.TimeoutExpired, IndexError):
+        return Check("gyroflow", True, "found (version unknown)")
+
+
 def run_all(c: cfg.Config | None = None) -> list[Check]:
     c = c or cfg.load()
     return [
@@ -81,6 +92,7 @@ def run_all(c: cfg.Config | None = None) -> list[Check]:
         check_lut_exists(c.dji_lut, "DJI Action 6 D-LogM -> Rec.709"),
         repair_dji_lut_tabs(c.dji_lut),
         ensure_dirs(c),
+        check_gyroflow(c.gyroflow),
     ]
 
 

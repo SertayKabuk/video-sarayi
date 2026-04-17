@@ -101,6 +101,7 @@ app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
+
 @app.get("/", include_in_schema=False)
 async def root() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")

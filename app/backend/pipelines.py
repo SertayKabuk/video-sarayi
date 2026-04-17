@@ -59,6 +59,10 @@ class PipelineParams:
     v_fov: float = 115.0
     v360_interp: str = "lanczos"
 
+    # --- Gyroflow stabilization (a6 pipelines only) ---
+    gyroflow_enabled: bool = False
+    gyroflow_smoothness: float = 0.5
+
     # --- crop (a6 pipelines) ---
     # crop_enabled=True applies the filter; crop_expr controls the geometry.
     # a6-reel default: "ih*(9/16):ih"  — vertical 9:16 from any input
@@ -107,6 +111,11 @@ class PipelineParams:
 
     # --- container ---
     faststart: bool = True
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "PipelineParams":
+        valid = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in valid})
 
     def merge(self, overrides: dict[str, Any] | None) -> "PipelineParams":
         if not overrides:
@@ -198,20 +207,17 @@ def build(pipeline: PipelineId, params: PipelineParams, ctx: BuildContext) -> li
     vf_parts.append(f"format={params.pix_fmt}")
     if params.crop_enabled:
         vf_parts.append(f"crop={params.crop_expr}")
-
     lut = ctx.x5_lut if uses_x5_lut(pipeline) else ctx.dji_lut
     vf_parts.append(f"lut3d=file={_lut_path_for_filter(lut)}:interp={params.lut_interp}")
-
     if params.scale_width and params.scale_height:
         vf_parts.append(f"scale={params.scale_width}:{params.scale_height}:flags={params.scale_flags}")
-
     vf_parts.append(f"format={params.pix_fmt}")
-    vf = ", ".join(vf_parts)
+    filter_args = ["-vf", ", ".join(vf_parts)]
 
     argv: list[str] = [
         ctx.ffmpeg, *ctx.extra_global,
         "-i", str(ctx.input_path),
-        "-vf", vf,
+        *filter_args,
     ]
 
     if encoder_family(pipeline) == "x265":

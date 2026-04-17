@@ -52,6 +52,36 @@ main {
 }
 .pane-wide { grid-column: 1 / -1; }
 
+.tips-panel {
+  grid-column: 1 / -1;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0;
+}
+.tips-panel summary {
+  cursor: pointer; padding: 10px 16px;
+  font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px;
+  list-style: none; display: flex; align-items: center; gap: 8px;
+  user-select: none;
+}
+.tips-panel summary::before {
+  content: "▶"; font-size: 9px; transition: transform 150ms;
+}
+.tips-panel[open] summary::before { transform: rotate(90deg); }
+.tips-panel summary:hover { color: var(--text); }
+
+.tips-body {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+  border-top: 1px solid var(--line); padding: 16px;
+}
+.tips-cam { padding: 0 16px; }
+.tips-cam:first-child { padding-left: 0; border-right: 1px solid var(--line); padding-right: 20px; }
+.tips-cam:last-child  { padding-left: 20px; padding-right: 0; }
+.tips-cam h3 { margin: 0 0 10px; font-size: 13px; color: var(--accent); font-weight: 600; }
+.tips-cam ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; }
+.tips-cam li { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.tips-cam li strong { color: var(--text); font-weight: 600; }
+.tips-cam li em { color: var(--warn); font-style: normal; }
+
 .pane-head {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 10px;
