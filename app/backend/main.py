@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -71,11 +73,13 @@ class PresetCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     pipeline: str
     params: dict[str, Any] = Field(default_factory=dict)
+    description: str = Field(default="", max_length=500)
 
 
 class PresetUpdateIn(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     params: dict[str, Any] | None = None
+    description: str | None = Field(default=None, max_length=500)
 
 
 class PresetDuplicateIn(BaseModel):
@@ -204,7 +208,46 @@ def _nearest_existing_dir(path: Path | None) -> str | None:
         candidate = candidate.parent
 
 
+def _run_dialog_macos(kind: Literal["input", "output"], suggested_path: str | None, default_dir: Path) -> str | None:
+    # macOS: Tk requires the main thread (Cocoa), which the server worker can't
+    # provide. Shell out to AppleScript instead — it spawns its own process.
+    suggested = Path(suggested_path) if suggested_path else None
+    initialdir = _nearest_existing_dir(suggested) or str(default_dir)
+    initialdir_esc = initialdir.replace("\\", "\\\\").replace('"', '\\"')
+
+    if kind == "input":
+        script = (
+            f'set theFile to choose file with prompt "Select input video" '
+            f'default location (POSIX file "{initialdir_esc}")\n'
+            f'return POSIX path of theFile'
+        )
+    else:
+        initialfile = ""
+        if suggested and suggested.name and not (suggested.exists() and suggested.is_dir()):
+            initialfile = suggested.name.replace("\\", "\\\\").replace('"', '\\"')
+        name_clause = f' default name "{initialfile}"' if initialfile else ""
+        script = (
+            f'set theFile to choose file name with prompt "Choose output file"'
+            f'{name_clause} default location (POSIX file "{initialdir_esc}")\n'
+            f'return POSIX path of theFile'
+        )
+
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        # User cancel → osascript exits non-zero with "User canceled." (code -128).
+        if "User canceled" in result.stderr or "-128" in result.stderr:
+            return None
+        raise RuntimeError(result.stderr.strip() or "file dialog failed")
+    path = result.stdout.strip()
+    return path or None
+
+
 def _run_dialog(kind: Literal["input", "output"], suggested_path: str | None, default_dir: Path) -> str | None:
+    if sys.platform == "darwin":
+        return _run_dialog_macos(kind, suggested_path, default_dir)
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -416,7 +459,9 @@ async def presets_list() -> dict:
 async def presets_create(body: PresetCreateIn) -> dict:
     pid = _validate_pipeline(body.pipeline)
     store: PresetStore = app.state.presets
-    preset = store.create(name=body.name, pipeline=pid, params=body.params)
+    preset = store.create(
+        name=body.name, pipeline=pid, params=body.params, description=body.description,
+    )
     return preset.to_dict()
 
 
@@ -426,7 +471,9 @@ async def presets_update(preset_id: str, body: PresetUpdateIn) -> dict:
     if preset_id.startswith("builtin:"):
         raise HTTPException(403, "cannot modify built-in preset")
     try:
-        preset = store.update(preset_id, name=body.name, params=body.params)
+        preset = store.update(
+            preset_id, name=body.name, params=body.params, description=body.description,
+        )
     except KeyError:
         raise HTTPException(404, "no such preset")
     return preset.to_dict()

@@ -52,6 +52,7 @@ def uses_x5_lut(pipeline: PipelineId) -> bool:
 @dataclass
 class PipelineParams:
     # --- v360 (X5) ---
+    v360_enabled: bool = True
     yaw: float = 0.0
     pitch: float = 0.0
     roll: float = 0.0
@@ -63,6 +64,10 @@ class PipelineParams:
     gyroflow_enabled: bool = False
     gyroflow_smoothness: float = 0.5
 
+    # --- framerate (resample: drops/duplicates frames, audio stays in sync) ---
+    fps_enabled: bool = False
+    fps_value: int = 30
+
     # --- crop (a6 pipelines) ---
     # crop_enabled=True applies the filter; crop_expr controls the geometry.
     # a6-reel default: "ih*(9/16):ih"  — vertical 9:16 from any input
@@ -71,6 +76,7 @@ class PipelineParams:
     crop_expr: str = "ih*(9/16):ih"
 
     # --- lut3d ---
+    lut_enabled: bool = True
     lut_interp: str = "tetrahedral"
 
     # --- scale (set width/height to 0 to skip scale filter) ---
@@ -135,7 +141,11 @@ class PipelineParams:
 def get_defaults(pipeline: PipelineId) -> PipelineParams:
     if pipeline == "x5-reel":
         # v360 handles the 9:16 reframe — no crop filter needed.
-        return PipelineParams(crop_enabled=False, crop_expr="ih*(9/16):ih")
+        # 30 fps on Instagram/TikTok preserves per-frame bitrate within the 14 Mbps cap.
+        return PipelineParams(
+            crop_enabled=False, crop_expr="ih*(9/16):ih",
+            fps_enabled=True, fps_value=30,
+        )
     if pipeline == "x5-yt":
         # v360 handles the 16:9 reframe — no separate crop needed.
         return PipelineParams(
@@ -147,7 +157,10 @@ def get_defaults(pipeline: PipelineId) -> PipelineParams:
         )
     if pipeline == "a6-reel":
         # Always crop landscape/square footage to vertical 9:16.
-        return PipelineParams(crop_enabled=True, crop_expr="ih*(9/16):ih")
+        return PipelineParams(
+            crop_enabled=True, crop_expr="ih*(9/16):ih",
+            fps_enabled=True, fps_value=30,
+        )
     if pipeline == "a6-yt":
         # Landscape 16:9 footage: no crop. Square-sensor footage: enable crop.
         return PipelineParams(
@@ -202,13 +215,16 @@ def _v360(p: PipelineParams) -> str:
 
 def build(pipeline: PipelineId, params: PipelineParams, ctx: BuildContext) -> list[str]:
     vf_parts: list[str] = []
-    if uses_v360(pipeline):
+    if params.fps_enabled and params.fps_value > 0:
+        vf_parts.append(f"fps={params.fps_value}")
+    if uses_v360(pipeline) and params.v360_enabled:
         vf_parts.append(_v360(params))
     vf_parts.append(f"format={params.pix_fmt}")
     if params.crop_enabled:
         vf_parts.append(f"crop={params.crop_expr}")
-    lut = ctx.x5_lut if uses_x5_lut(pipeline) else ctx.dji_lut
-    vf_parts.append(f"lut3d=file={_lut_path_for_filter(lut)}:interp={params.lut_interp}")
+    if params.lut_enabled:
+        lut = ctx.x5_lut if uses_x5_lut(pipeline) else ctx.dji_lut
+        vf_parts.append(f"lut3d=file={_lut_path_for_filter(lut)}:interp={params.lut_interp}")
     if params.scale_width and params.scale_height:
         vf_parts.append(f"scale={params.scale_width}:{params.scale_height}:flags={params.scale_flags}")
     vf_parts.append(f"format={params.pix_fmt}")

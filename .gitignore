@@ -64,3 +64,5 @@ profile.json.gz
 !/libs/ffmpeg/bin/README
 /libs/Gyroflow-windows64/*
 !/libs/Gyroflow-windows64/README
+
+video_sarayi.egg-info/

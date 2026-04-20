@@ -31,6 +31,8 @@ const PARAM_GROUPS = [
     when: (t) => t.uses_v360,
     grid: "cols-3",
     fields: [
+      { key: "v360_enabled", label: "Reframe 360→flat", type: "checkbox", wide: true,
+        hint: "Off = keep equirectangular 360 output (skips v360 filter). Yaw/Pitch/Roll/FOV below are ignored when off." },
       { key: "yaw",        label: "Yaw",           type: "number", step: 1,   hint: "0–360, pan around sphere" },
       { key: "pitch",      label: "Pitch",          type: "number", step: 1,   hint: "-90 (down) to 90 (up)" },
       { key: "roll",       label: "Roll",           type: "number", step: 1,   hint: "Horizon leveling" },
@@ -62,9 +64,21 @@ const PARAM_GROUPS = [
     ],
   },
   {
+    label: "Framerate",
+    grid: "cols-2",
+    fields: [
+      { key: "fps_enabled", label: "Force output framerate", type: "checkbox",
+        hint: "Resample (drop/duplicate frames) to hit target. Audio stays in sync." },
+      { key: "fps_value", label: "Target fps", type: "number", step: 1, min: 1, max: 240,
+        hint: "Instagram/TikTok: 30 recommended — preserves per-frame bitrate." },
+    ],
+  },
+  {
     label: "LUT",
     grid: "cols-2",
     fields: [
+      { key: "lut_enabled", label: "Apply LUT", type: "checkbox",
+        hint: "Off = skip lut3d filter (use when footage is already Rec.709 or you want raw log)." },
       { key: "lut_interp", label: "Interpolation", type: "select", options: ["tetrahedral","trilinear","nearest"] },
     ],
   },
@@ -260,6 +274,7 @@ function wireEvents() {
     updateFormFromParams();
     schedulePreview();
     updatePresetButtons();
+    renderPresetDescription();
   });
 
   $("#btn-preset-save-as").addEventListener("click", savePresetAs);
@@ -364,6 +379,7 @@ function renderParamsForm() {
       if (el.type === "checkbox") S.params[key] = el.checked;
       else if (el.type === "number") S.params[key] = el.value === "" ? null : Number(el.value);
       else S.params[key] = el.value;
+      applyParamSideEffects(key);
       S.currentPresetId = null;      // unsaved change
       renderPresetDropdown();
       schedulePreview();
@@ -377,6 +393,26 @@ function renderParamsForm() {
 function updateFormFromParams() {
   // Re-render the form with current S.params without rebuilding from scratch.
   renderParamsForm();
+}
+
+// When certain params change, auto-adjust related params so defaults stay sane.
+// Returns true if any dependent params changed (caller should re-render form).
+function applyParamSideEffects(changedKey) {
+  if (changedKey !== "v360_enabled") return;
+  const defaults = S.pipelineMap[S.currentPipeline]?.defaults || {};
+  if (S.params.v360_enabled) {
+    // Reframing back on → restore pipeline's default output resolution and encoder preset.
+    S.params.scale_width = defaults.scale_width ?? 0;
+    S.params.scale_height = defaults.scale_height ?? 0;
+    if (defaults.av1_preset != null) S.params.av1_preset = defaults.av1_preset;
+  } else {
+    // Keeping equirectangular 360 → skip scale so the sphere isn't squashed.
+    S.params.scale_width = 0;
+    S.params.scale_height = 0;
+    // SVT-AV1 rejects presets < 5 at 8K+ (X5 source is 7680×3840). Bump if needed.
+    if (S.params.av1_preset != null && S.params.av1_preset < 5) S.params.av1_preset = 5;
+  }
+  updateFormFromParams();
 }
 
 // ── preset dropdown ─────────────────────────────────────────────────────────
@@ -423,6 +459,21 @@ function renderPresetDropdown() {
 
   if (S.currentPresetId) sel.value = S.currentPresetId;
   updatePresetButtons();
+  renderPresetDescription();
+}
+
+function renderPresetDescription() {
+  const el = $("#preset-description");
+  if (!el) return;
+  const preset = S.presets.find((p) => p.id === S.currentPresetId);
+  const desc = preset?.description?.trim();
+  if (desc) {
+    el.textContent = desc;
+    el.hidden = false;
+  } else {
+    el.textContent = "";
+    el.hidden = true;
+  }
 }
 
 function updatePresetButtons() {
