@@ -91,16 +91,6 @@ main {
 .hint { color: var(--muted); font-size: 12px; margin: 6px 0 12px; }
 .hint code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
 
-.file-list { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow: auto; }
-.file-list li {
-  padding: 8px 10px; border-radius: 6px; cursor: pointer;
-  display: flex; justify-content: space-between; gap: 8px;
-  border: 1px solid transparent;
-}
-.file-list li:hover { background: var(--panel-2); }
-.file-list li.selected { background: var(--panel-2); border-color: var(--accent); }
-.file-list .size { color: var(--muted); font-size: 11px; white-space: nowrap; }
-
 .field { display: block; margin: 10px 0; }
 .field > span { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; }
 .selected {
@@ -109,6 +99,17 @@ main {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .selected.has-file { color: var(--text); }
+
+.path-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.path-row input { flex: 1; min-width: 0; }
+.path-row button { flex: 0 0 auto; white-space: nowrap; }
+.path-display {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 select, input[type="number"], input[type="text"], textarea {
   background: var(--panel-2); color: var(--text);
@@ -210,6 +211,19 @@ textarea.raw {
   display: flex; gap: 14px; margin-top: 6px;
   font-size: 11px; color: var(--muted); font-family: ui-monospace, Consolas, monospace;
 }
+
+.job-paths {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 8px;
+}
+.job-path {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, Consolas, monospace;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.job-path strong { color: var(--text); font-weight: 600; }
 
 .job-actions { display: flex; gap: 6px; }
 .job-actions a, .job-actions button { font-size: 11px; padding: 4px 9px; }

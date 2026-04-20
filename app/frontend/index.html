@@ -51,11 +51,32 @@
 
     <section class="pane" id="pane-inputs">
       <div class="pane-head">
-        <h2>Inputs</h2>
-        <button id="btn-refresh-inputs" class="ghost">Refresh</button>
+        <h2>Paths</h2>
       </div>
-      <p class="hint">Drop source files into <code>input/</code>.</p>
-      <ul id="file-list" class="file-list"></ul>
+
+      <label class="field">
+        <span>Input file</span>
+        <div class="path-row">
+          <input id="input-path" type="text" placeholder="Paste a video path or browse for one…" autocomplete="off" spellcheck="false" />
+          <button id="btn-browse-input" class="ghost" type="button">Browse…</button>
+        </div>
+      </label>
+
+      <label class="field">
+        <span>Output file</span>
+        <div class="path-row">
+          <input id="output-path" type="text" placeholder="Leave blank to auto-name inside output/" autocomplete="off" spellcheck="false" />
+          <button id="btn-browse-output" class="ghost" type="button">Browse…</button>
+        </div>
+      </label>
+
+      <label class="field">
+        <span>Resolved output</span>
+        <div id="resolved-output" class="selected path-display">(preview will show the output path)</div>
+      </label>
+
+      <p class="hint">You can paste paths manually or use Browse for native file dialogs.</p>
+      <div id="paths-error" class="error" hidden></div>
     </section>
 
     <section class="pane" id="pane-convert">
@@ -65,7 +86,7 @@
 
       <label class="field">
         <span>Selected file</span>
-        <div id="selected-file" class="selected">(pick a file on the left)</div>
+        <div id="selected-file" class="selected">(choose an input file)</div>
       </label>
 
       <div class="cam-plat-row">

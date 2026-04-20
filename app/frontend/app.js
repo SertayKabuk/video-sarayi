@@ -5,8 +5,9 @@ const $ = (sel) => document.querySelector(sel);
 // ── state ──────────────────────────────────────────────────────────────────
 
 const S = {
-  files: [],
-  selectedFile: null,
+  inputPath: "",
+  outputPath: "",
+  outputMode: "auto",     // auto | manual
   pipelines: [],            // [{id, label, defaults, traits}, ...]
   pipelineMap: {},          // id -> pipeline object
   presets: [],              // [{id, name, pipeline, params, built_in}, ...]
@@ -15,6 +16,8 @@ const S = {
   params: {},               // merged PipelineParams dict
   overrideActive: false,    // raw argv textarea active?
   currentArgv: [],          // last preview argv from backend
+  currentOutputPath: "",
+  currentOutputUrl: null,
   previewDebounce: null,
   jobs: new Map(),          // id -> {data, logs:[], socket:null}
 };
@@ -140,7 +143,7 @@ const PARAM_GROUPS = [
 
 async function boot() {
   // Pipelines must load before presets (selectBestPreset needs S.pipelineMap).
-  await Promise.all([loadHealth(), loadPipelines(), loadInputs(), loadJobs()]);
+  await Promise.all([loadHealth(), loadPipelines(), loadJobs()]);
   await loadPresets();
   wireEvents();
 }
@@ -197,25 +200,6 @@ async function loadPresets() {
   renderPresetDropdown();
 }
 
-async function loadInputs() {
-  const r = await fetch("/api/inputs").then((r) => r.json());
-  S.files = r.files;
-  const ul = $("#file-list");
-  ul.innerHTML = "";
-  if (!S.files.length) {
-    ul.innerHTML = `<li style="cursor:default"><em style="color:var(--muted)">No files yet.</em></li>`;
-    return;
-  }
-  for (const f of S.files) {
-    const li = document.createElement("li");
-    li.dataset.name = f.name;
-    li.innerHTML = `<span>${escHtml(f.name)}</span><span class="size">${fmtSize(f.size)}</span>`;
-    if (S.selectedFile === f.name) li.classList.add("selected");
-    li.addEventListener("click", () => selectFile(f.name));
-    ul.appendChild(li);
-  }
-}
-
 async function loadJobs() {
   const r = await fetch("/api/jobs").then((r) => r.json());
   for (const j of r.jobs) {
@@ -229,8 +213,24 @@ async function loadJobs() {
 // ── wiring ─────────────────────────────────────────────────────────────────
 
 function wireEvents() {
-  $("#btn-refresh-inputs").addEventListener("click", loadInputs);
-  window.addEventListener("focus", loadInputs);
+  $("#input-path").addEventListener("input", (e) => {
+    setInputPath(e.target.value, { autodetectCamera: false });
+    schedulePreview();
+  });
+  $("#input-path").addEventListener("change", (e) => {
+    setInputPath(e.target.value, { autodetectCamera: true });
+    schedulePreview();
+  });
+  $("#output-path").addEventListener("input", (e) => {
+    const value = e.target.value.trim();
+    S.outputMode = value ? "manual" : "auto";
+    S.outputPath = value;
+    clearPathError();
+    renderResolvedOutput();
+    schedulePreview();
+  });
+  $("#btn-browse-input").addEventListener("click", browseInputPath);
+  $("#btn-browse-output").addEventListener("click", browseOutputPath);
 
   function onCameraOrPlatformChange() {
     const newPipeline = derivePipeline($("#camera").value, $("#platform").value);
@@ -289,6 +289,9 @@ function wireEvents() {
 
   // Render initial form — params may already be populated by loadPresets' selectBestPreset.
   renderParamsForm();
+  updateSelectedFileLabel();
+  renderResolvedOutput();
+  updateConvertButtonState();
   schedulePreview();
 }
 
@@ -498,14 +501,22 @@ async function fetchPreview() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        file: S.selectedFile,
+        input_path: S.inputPath || null,
+        output_path: S.outputMode === "manual" ? (S.outputPath || null) : null,
         pipeline: S.currentPipeline,
         params: S.params,
       }),
     });
-    if (!r.ok) return;
     const data = await r.json();
+    if (!r.ok) {
+      showPathError(data.error || r.statusText);
+      return;
+    }
+    clearPathError();
     S.currentArgv = data.argv;
+    S.currentOutputPath = data.output_path || "";
+    S.currentOutputUrl = data.output_url || null;
+    renderResolvedOutput();
     renderArgvPreview(data.argv);
     if (S.overrideActive) $("#argv-override").value = data.argv.join("\n");
   } catch (_) {
@@ -527,24 +538,110 @@ function renderArgvPreview(argv) {
   pre.innerHTML = lines.join("\n");
 }
 
-// ── file selection ──────────────────────────────────────────────────────────
+// ── path selection ──────────────────────────────────────────────────────────
 
-function selectFile(name) {
-  S.selectedFile = name;
-  $("#selected-file").textContent = name;
-  $("#selected-file").classList.add("has-file");
-  for (const li of document.querySelectorAll("#file-list li"))
-    li.classList.toggle("selected", li.dataset.name === name);
+function setInputPath(path, { autodetectCamera = true } = {}) {
+  S.inputPath = String(path || "").trim();
+  $("#input-path").value = S.inputPath;
+  updateSelectedFileLabel();
+  updateConvertButtonState();
+  clearPathError();
+  if (autodetectCamera) autodetectCameraFromInput();
+}
 
+function setOutputPath(path, { manual = true } = {}) {
+  S.outputMode = manual && String(path || "").trim() ? "manual" : "auto";
+  S.outputPath = S.outputMode === "manual" ? String(path || "").trim() : "";
+  $("#output-path").value = S.outputPath;
+  clearPathError();
+  renderResolvedOutput();
+}
+
+function updateSelectedFileLabel() {
+  const name = baseName(S.inputPath);
+  const el = $("#selected-file");
+  if (name) {
+    el.textContent = name;
+    el.classList.add("has-file");
+  } else {
+    el.textContent = "(choose an input file)";
+    el.classList.remove("has-file");
+  }
+}
+
+function renderResolvedOutput() {
+  const el = $("#resolved-output");
+  const text = S.currentOutputPath || "(preview will show the output path)";
+  el.textContent = text;
+  el.title = text;
+  el.classList.toggle("has-file", !!S.currentOutputPath);
+}
+
+function updateConvertButtonState() {
+  $("#btn-convert").disabled = !S.inputPath;
+}
+
+function autodetectCameraFromInput() {
+  const name = baseName(S.inputPath);
+  if (!name) return;
   const cam = $("#camera");
   const detectedCam = /^dji/i.test(name) ? "a6" : "x5";
   if (cam.value !== detectedCam) {
     cam.value = detectedCam;
     cam.dispatchEvent(new Event("change"));
   }
+}
 
-  $("#btn-convert").disabled = false;
-  schedulePreview();
+function showPathError(message) {
+  const el = $("#paths-error");
+  el.textContent = message;
+  el.hidden = !message;
+}
+
+function clearPathError() {
+  showPathError("");
+}
+
+async function browseInputPath() {
+  const btn = $("#btn-browse-input");
+  clearPathError();
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/dialogs/input", { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (!data.path) return;
+    setInputPath(data.path, { autodetectCamera: true });
+    schedulePreview();
+  } catch (e) {
+    showPathError(String(e.message || e));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function browseOutputPath() {
+  const btn = $("#btn-browse-output");
+  clearPathError();
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/dialogs/output", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        suggested_path: S.outputMode === "manual" ? S.outputPath : (S.currentOutputPath || null),
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (!data.path) return;
+    setOutputPath(data.path, { manual: true });
+    schedulePreview();
+  } catch (e) {
+    showPathError(String(e.message || e));
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── job submission ──────────────────────────────────────────────────────────
@@ -553,16 +650,26 @@ async function submitJob() {
   const btn = $("#btn-convert");
   const err = $("#convert-error");
   err.hidden = true;
-  if (!S.selectedFile) return;
+  if (!S.inputPath) {
+    err.textContent = "Choose an input file first.";
+    err.hidden = false;
+    return;
+  }
 
-  const body = { file: S.selectedFile, pipeline: S.currentPipeline };
+  const body = {
+    input_path: S.inputPath,
+    pipeline: S.currentPipeline,
+    params: S.params,
+  };
+
+  if (S.outputMode === "manual" && S.outputPath) {
+    body.output_path = S.outputPath;
+  }
 
   if (S.overrideActive) {
     const tokens = $("#argv-override").value.split("\n").map((l) => l.trim()).filter(Boolean);
     if (!tokens.length) { err.textContent = "Raw command is empty."; err.hidden = false; return; }
     body.argv_override = tokens;
-  } else {
-    body.params = S.params;
   }
 
   btn.disabled = true;
@@ -584,7 +691,7 @@ async function submitJob() {
     err.textContent = String(e.message || e);
     err.hidden = false;
   } finally {
-    btn.disabled = false;
+    updateConvertButtonState();
   }
 }
 
@@ -649,6 +756,10 @@ function renderJob(entry) {
     </div>
     <div class="bar"><div style="width:${pct}%"></div></div>
     <div class="metrics">${metrics || "&nbsp;"}</div>
+    <div class="job-paths">
+      <div class="job-path"><strong>Input</strong> ${escHtml(j.input_path || j.input)}</div>
+      <div class="job-path"><strong>Output</strong> ${escHtml(j.output_path || j.output)}</div>
+    </div>
     ${j.error ? `<div class="error" style="margin-top:8px">${escHtml(j.error)}</div>` : ""}
     <div class="log" id="log-${j.id}"${entry.logOpen ? "" : " hidden"}></div>`;
 
@@ -672,9 +783,9 @@ function renderJob(entry) {
     cancel.addEventListener("click", () => cancelJob(j.id));
     actions.appendChild(cancel);
   }
-  if (j.status === "done") {
+  if (j.status === "done" && j.output_url) {
     const a = document.createElement("a");
-    a.href = `/output/${encodeURIComponent(j.output)}`;
+    a.href = j.output_url;
     a.textContent = "Download";
     a.target = "_blank"; a.rel = "noopener";
     actions.appendChild(a);
@@ -682,7 +793,7 @@ function renderJob(entry) {
     const video = document.createElement("video");
     video.controls = true;
     video.preload = "metadata";
-    video.src = `/output/${encodeURIComponent(j.output)}`;
+    video.src = j.output_url;
     video.style.cssText = "display:block;width:100%;max-height:320px;margin-top:10px;border-radius:6px;border:1px solid var(--line);background:#000";
     li.appendChild(video);
   }
@@ -715,6 +826,10 @@ function fmtSize(bytes) {
 function fmtDuration(sec) {
   const s = Math.round(sec), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
   return h ? `${h}:${String(m).padStart(2,"0")}:${String(r).padStart(2,"0")}` : `${m}:${String(r).padStart(2,"0")}`;
+}
+
+function baseName(path) {
+  return String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
 }
 
 const ESC = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":'&#39;' };

@@ -6,7 +6,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from . import config as cfg
 from . import preflight
 from .jobs import JobManager, Status
+from .pathing import output_url_for_path, resolve_input_path, resolve_requested_output_path
 from .pipelines import (
     BuildContext,
     PIPELINES,
@@ -25,7 +26,6 @@ from .pipelines import (
     build,
     encoder_family,
     get_defaults,
-    resolve_output_path,
     uses_crop,
     uses_v360,
     uses_x5_lut,
@@ -48,15 +48,23 @@ VALID_PIPELINES = set(PIPELINES.keys())
 
 class PreviewIn(BaseModel):
     file: str | None = None
+    input_path: str | None = None
+    output_path: str | None = None
     pipeline: str
     params: dict[str, Any] | None = None
 
 
 class JobIn(BaseModel):
-    file: str
+    file: str | None = None
+    input_path: str | None = None
+    output_path: str | None = None
     pipeline: str
     params: dict[str, Any] | None = None
     argv_override: list[str] | None = None
+
+
+class OutputDialogIn(BaseModel):
+    suggested_path: str | None = None
 
 
 class PresetCreateIn(BaseModel):
@@ -151,35 +159,124 @@ async def list_inputs() -> dict:
     return {"files": files}
 
 
-def _preview_argv(file: str | None, pipeline: PipelineId, params_in: dict[str, Any] | None) -> tuple[list[str], Path]:
+def _preview_argv(
+    file: str | None,
+    input_path: str | None,
+    output_path: str | None,
+    pipeline: PipelineId,
+    params_in: dict[str, Any] | None,
+) -> tuple[list[str], Path, Path]:
     config: cfg.Config = app.state.config
-    input_path = config.input_dir / (file or "INPUT_FILENAME.mp4")
-    output_path = (
-        resolve_output_path(config.output_dir, input_path, pipeline)
-        if file
-        else config.output_dir / f"INPUT_FILENAME__{pipeline}.mp4"
+    resolved_input = resolve_input_path(
+        config,
+        file_name=file,
+        input_path=input_path,
+        strict=False,
+    )
+    resolved_output = resolve_requested_output_path(
+        config,
+        pipeline=pipeline,
+        input_path=resolved_input,
+        output_path=output_path,
+        create_parent=False,
     )
     params = get_defaults(pipeline).merge(params_in)
     ctx = BuildContext(
-        input_path=input_path,
-        output_path=output_path,
+        input_path=resolved_input,
+        output_path=resolved_output,
         x5_lut=config.x5_lut,
         dji_lut=config.dji_lut,
         ffmpeg=config.ffmpeg,
     )
     argv = build(pipeline, params, ctx)
-    return argv, output_path
+    return argv, resolved_input, resolved_output
+
+
+def _nearest_existing_dir(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    candidate = path if path.exists() and path.is_dir() else path.parent
+    while True:
+        if candidate.exists() and candidate.is_dir():
+            return str(candidate)
+        if candidate == candidate.parent:
+            return None
+        candidate = candidate.parent
+
+
+def _run_dialog(kind: Literal["input", "output"], suggested_path: str | None, default_dir: Path) -> str | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise RuntimeError("native file dialogs are unavailable in this Python environment") from exc
+
+    suggested = Path(suggested_path) if suggested_path else None
+    initialdir = _nearest_existing_dir(suggested) or str(default_dir)
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            root.update()
+        except Exception:
+            pass
+
+        if kind == "input":
+            return filedialog.askopenfilename(
+                title="Select input video",
+                initialdir=initialdir,
+                filetypes=[
+                    ("Video files", "*.mp4 *.mov *.mkv *.avi *.insv *.webm *.m4v *.ts *.mxf"),
+                    ("All files", "*.*"),
+                ],
+            ) or None
+
+        initialfile = None
+        if suggested and suggested.name and not (suggested.exists() and suggested.is_dir()):
+            initialfile = suggested.name
+        return filedialog.asksaveasfilename(
+            title="Choose output file",
+            initialdir=initialdir,
+            initialfile=initialfile,
+            defaultextension=".mp4",
+            filetypes=[
+                ("MP4 video", "*.mp4"),
+                ("MOV video", "*.mov"),
+                ("Matroska video", "*.mkv"),
+                ("All files", "*.*"),
+            ],
+        ) or None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 @app.post("/api/preview")
 async def preview(body: PreviewIn) -> dict:
     pid = _validate_pipeline(body.pipeline)
-    argv, output_path = _preview_argv(body.file, pid, body.params)
+    config: cfg.Config = app.state.config
+    argv, input_path, output_path = _preview_argv(
+        body.file,
+        body.input_path,
+        body.output_path,
+        pid,
+        body.params,
+    )
     merged = get_defaults(pid).merge(body.params).to_dict()
     return {
         "argv": argv,
         "output": output_path.name,
         "output_path": str(output_path),
+        "output_url": output_url_for_path(config, output_path),
+        "input_path": str(input_path),
         "merged_params": merged,
     }
 
@@ -187,14 +284,64 @@ async def preview(body: PreviewIn) -> dict:
 @app.post("/api/jobs")
 async def create_job(body: JobIn) -> dict:
     pid = _validate_pipeline(body.pipeline)
+    config: cfg.Config = app.state.config
+    if not (body.file and body.file.strip()) and not (body.input_path and body.input_path.strip()):
+        raise HTTPException(400, "input file path is required")
     # When argv_override is set, params are ignored but must still be stored
     # for the job record (so the UI can show what was originally chosen).
     manager: JobManager = app.state.manager
     try:
-        job = manager.submit(body.file, pid, body.params, body.argv_override)
+        resolved_input = resolve_input_path(
+            config,
+            file_name=body.file,
+            input_path=body.input_path,
+            strict=True,
+        )
+        resolved_output = resolve_requested_output_path(
+            config,
+            pipeline=pid,
+            input_path=resolved_input,
+            output_path=body.output_path,
+            create_parent=True,
+        )
+        job = manager.submit(
+            resolved_input,
+            pid,
+            body.params,
+            body.argv_override,
+            output_path=resolved_output,
+        )
     except FileNotFoundError:
-        raise HTTPException(404, f"input file not found: {body.file}")
+        missing = body.input_path or body.file or "input file"
+        raise HTTPException(404, f"input file not found: {missing}")
+    except OSError as exc:
+        raise HTTPException(400, f"output path is not usable: {exc}")
     return job.serialize()
+
+
+@app.post("/api/dialogs/input")
+async def pick_input_dialog() -> dict:
+    config: cfg.Config = app.state.config
+    try:
+        path = await asyncio.to_thread(_run_dialog, "input", None, config.input_dir)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    return {"path": path}
+
+
+@app.post("/api/dialogs/output")
+async def pick_output_dialog(body: OutputDialogIn | None = None) -> dict:
+    config: cfg.Config = app.state.config
+    try:
+        path = await asyncio.to_thread(
+            _run_dialog,
+            "output",
+            body.suggested_path if body else None,
+            config.output_dir,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    return {"path": path}
 
 
 @app.get("/api/jobs")

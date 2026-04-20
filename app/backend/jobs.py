@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config as cfg
+from .pathing import output_url_for_path
 from .pipelines import (
     BuildContext,
     PipelineId,
@@ -41,6 +42,7 @@ class Job:
     id: str
     input_path: Path
     output_path: Path
+    output_url: str | None
     pipeline: PipelineId
     params: dict[str, Any]
     argv_override: list[str] | None = None
@@ -59,8 +61,10 @@ class Job:
         return {
             "id": self.id,
             "input": self.input_path.name,
+            "input_path": str(self.input_path),
             "output": self.output_path.name,
             "output_path": str(self.output_path),
+            "output_url": self.output_url,
             "pipeline": self.pipeline,
             "params": self.params,
             "argv_override": self.argv_override,
@@ -135,27 +139,29 @@ class JobManager:
 
     def submit(
         self,
-        file_name: str,
+        input_path: Path,
         pipeline: PipelineId,
         params: dict[str, Any] | None,
         argv_override: list[str] | None = None,
+        *,
+        output_path: Path | None = None,
     ) -> Job:
-        input_path = (self.config.input_dir / file_name).resolve()
-        if not input_path.exists():
-            raise FileNotFoundError(file_name)
-        # Prevent path-traversal: ensure input stays inside input_dir.
-        input_dir = self.config.input_dir.resolve()
-        try:
-            input_path.relative_to(input_dir)
-        except ValueError:
-            raise FileNotFoundError(file_name)
+        input_path = input_path.expanduser().resolve()
+        if not input_path.exists() or not input_path.is_file():
+            raise FileNotFoundError(str(input_path))
 
-        output_path = resolve_output_path(self.config.output_dir, input_path, pipeline)
+        output_path = (
+            output_path.expanduser().resolve()
+            if output_path is not None
+            else resolve_output_path(self.config.output_dir, input_path, pipeline).resolve()
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         merged = get_defaults(pipeline).merge(params).to_dict()
         job = Job(
             id=uuid.uuid4().hex[:12],
             input_path=input_path,
             output_path=output_path,
+            output_url=output_url_for_path(self.config, output_path),
             pipeline=pipeline,
             params=merged,
             argv_override=list(argv_override) if argv_override else None,

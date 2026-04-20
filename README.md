@@ -41,14 +41,15 @@ Do your creative work in the proprietary tools first, then drop the export here 
 
 ### In this app
 
-1. Drop your exported file into `input/`.
+1. Paste an input file path into the UI, or click **Browse…** to pick one with a native file dialog.
 2. Open `http://127.0.0.1:8000`.
-3. Select the file — camera is detected automatically from the filename (`DJI_*` → DJI Action 6, anything else → Insta360 X5).
-4. Choose the target platform (Reel or YouTube).
-5. Pick a preset, adjust parameters if needed.
-6. Optionally enable **Edit ffmpeg command directly** to tweak the generated argv.
-7. Click **Convert** and monitor the job in the Jobs pane.
-8. Download the completed file from `output/`.
+3. Optionally set an explicit output file path, or leave it blank to auto-name inside `output/`.
+4. Camera is detected automatically from the input filename (`DJI_*` → DJI Action 6, anything else → Insta360 X5).
+5. Choose the target platform (Reel or YouTube).
+6. Pick a preset, adjust parameters if needed.
+7. Optionally enable **Edit ffmpeg command directly** to tweak the generated argv.
+8. Click **Convert** and monitor the job in the Jobs pane.
+9. Managed outputs saved inside `output/` can still be downloaded in-browser; custom output paths are shown directly in the Jobs pane.
 
 ## Pipelines
 
@@ -72,7 +73,7 @@ Do your creative work in the proprietary tools first, then drop the export here 
 app/
   backend/               FastAPI app, pipeline builders, presets, job queue, progress parser
   frontend/              Single-page UI (HTML, CSS, vanilla JS)
-input/                   Drop source files here
+input/                   Default local input folder (still available if you want to keep files near the repo)
 libs/
   ffmpeg/                Bundled FFmpeg (bin/ffmpeg.exe, bin/ffprobe.exe)
   Gyroflow-windows64/    Bundled Gyroflow (Gyroflow.exe)
@@ -156,7 +157,7 @@ A set of starter presets is seeded into `presets.json` on first run.
 output/<input-stem>__<pipeline-id>.mp4
 ```
 
-If the file already exists, `_1`, `_2`, etc. are appended.
+If the output path is left blank, Video Sarayi uses the pattern above. If the file already exists, `_1`, `_2`, etc. are appended.
 
 ## Development
 
@@ -172,4 +173,4 @@ uv run python -m pytest -q
 | Missing encoder error | Use a full FFmpeg build with libx265, libsvtav1, libopus |
 | LUT check fails | Place both `.cube` files in `luts/` |
 | Gyroflow not running | Place `Gyroflow.exe` in `libs/Gyroflow-windows64/` or set `GYROFLOW` env var |
-| Files not appearing in UI | Files must be directly inside `input/`, not in subfolders, and not hidden dotfiles |
+| Native Browse dialog fails | Paste the full input/output path manually; file dialogs depend on the local Python GUI stack |
