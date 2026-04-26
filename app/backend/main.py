@@ -43,6 +43,7 @@ log = logging.getLogger("video-sarayi")
 
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
+FRONTEND_DIST = FRONTEND_DIR / "dist"
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "output"
 PRESETS_PATH = Path(__file__).resolve().parents[2] / "presets.json"
 VALID_PIPELINES = set(PIPELINES.keys())
@@ -110,13 +111,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Video Sarayi", lifespan=lifespan)
 
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+else:
+    log.warning("Frontend dist/ not found — run: pnpm --dir app/frontend build")
 
 
 @app.get("/", include_in_schema=False)
 async def root() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html")
+    if not FRONTEND_DIST.exists():
+        raise HTTPException(503, "Frontend not built. Run: pnpm --dir app/frontend build")
+    return FileResponse(FRONTEND_DIST / "index.html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    favicon_path = FRONTEND_DIST / "favicon.ico"
+    if not favicon_path.exists():
+        raise HTTPException(404, "favicon not found")
+    return FileResponse(favicon_path)
 
 
 @app.get("/api/health")

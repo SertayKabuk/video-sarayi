@@ -5,11 +5,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install dependencies (recommended)
+# Install Python dependencies (recommended)
 uv sync --extra dev
 
-# Run server
+# Run backend server (production — serves Vite dist/)
 uv run uvicorn app.backend.main:app --host 127.0.0.1 --port 8000
+
+# Frontend dev server (proxies /api + /output to backend on :8000)
+pnpm --dir app/frontend dev        # http://127.0.0.1:5173
+
+# Frontend production build (required before running backend standalone)
+pnpm --dir app/frontend build      # outputs app/frontend/dist/
 
 # Run all tests
 python -m pytest -q
@@ -21,7 +27,7 @@ python -m pytest tests/test_pipelines.py -q
 python -m pytest tests/test_pipelines.py::test_x5_reel_defaults -q
 ```
 
-Windows shortcut: `run.bat` (starts server and opens browser).
+Windows shortcut: `run.bat` (builds frontend, starts server, opens browser).
 
 ## Architecture
 
@@ -61,9 +67,27 @@ FFmpeg/FFprobe resolved in order: `FFMPEG`/`FFPROBE` env vars → bundled `ffmpe
 
 Runs at startup (FastAPI lifespan): checks FFmpeg runnable, required encoders present (libx265, libsvtav1, libopus), LUT files exist, auto-repairs the DJI LUT tab→space bug, creates `input/` and `output/` dirs.
 
-### Frontend (`app/frontend/app.js`)
+### Frontend (`app/frontend/src/`)
 
-Vanilla JS (no framework), ~700 lines. Single global `S` object holds all state. `PARAM_GROUPS` schema drives the parameter form with conditional fieldset visibility per pipeline. Pattern: `load*()` fetches data into `S`, `render*()` rebuilds DOM from `S`. Preview requests are debounced 180 ms. WebSocket reconnects automatically for in-progress jobs on page load.
+**Stack:** Vite 8 + React 19 + TypeScript 5.9 + Tailwind v4 + Untitled UI React + TanStack Query v5.
+
+**Dev workflow:** run `pnpm --dir app/frontend dev` (Vite dev server on :5173, proxies `/api` and `/output` to FastAPI on :8000). Production: `pnpm --dir app/frontend build` → outputs `app/frontend/dist/` which FastAPI serves.
+
+**Key directories:**
+- `src/api/` — typed fetch wrappers for every API endpoint
+- `src/types/api.ts` — TypeScript types for Pipeline, Preset, Job, etc.
+- `src/lib/param-groups.ts` — `PARAM_GROUPS` schema (port of original app.js) — drives the params form declaratively
+- `src/lib/` — format utilities, camera detection, pipeline ID derivation
+- `src/hooks/` — TanStack Query wrappers (`use-pipelines`, `use-presets`, `use-jobs`, `use-health`) + `use-job-events` (WebSocket) + `use-preview` (debounced 180ms)
+- `src/state/app-context.tsx` + `src/state/app-reducer.ts` — React Context + useReducer for UI state (camera, platform, params, paths, override flag)
+- `src/components/layout/` — Header, HealthPills, ThemeToggle (light/dark toggle, defaults dark)
+- `src/components/tips/` — PrepTipsPanel (collapsible camera prep guide)
+- `src/components/paths/` — PathsPanel, InputPathField, OutputPathField, ResolvedOutput
+- `src/components/convert/` — ConvertPanel, CameraPlatformSelector, PresetBar, ParamsForm, ParamFieldCell, ArgvOverride, ArgvPreview, ConvertButton
+- `src/components/jobs/` — JobsPanel, JobCard, JobProgress, JobPaths, JobActions, JobLog
+- `src/components/base/` — Untitled UI base component library (Button, Input, Select, etc.)
+
+**API contracts unchanged.** All backend routes identical to original.
 
 ## Requirements
 

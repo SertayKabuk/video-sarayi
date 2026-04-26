@@ -1,149 +1,28 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Video Sarayi</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
-</head>
-<body>
-  <header>
-    <h1>Video Sarayi</h1>
-    <div id="health" class="health"></div>
-  </header>
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="description" content="Video Sarayi — local action camera converter" />
 
-  <main>
-    <details class="tips-panel" id="tips-panel">
-      <summary>Prep tips — before you drop files here</summary>
-      <div class="tips-body">
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400..700;1,14..32,400..700&display=swap" rel="stylesheet" />
 
-        <div class="tips-cam">
-          <h3>Insta360 X5 &rarr; Insta360 Studio</h3>
-          <ol>
-            <li><strong>Reframe in Studio.</strong> Drag to set your perspective (yaw / pitch / FOV). This is the only place you can do it — Video Sarayi encodes the flat output you export.</li>
-            <li><strong>Stabilization.</strong> Enable <em>FlowState</em> in Studio. It's the best stabilizer for the X5.</li>
-            <li><strong>Color profile: keep I-Log.</strong> In export settings choose <em>I-Log</em> (not "Standard" / "Vivid"). Video Sarayi applies the I-Log → Rec.709 LUT during encoding. Baking it in Studio too will double-apply the grade and blow out highlights.</li>
-            <li><strong>Export codec.</strong> Use the highest-quality option available — ProRes 422 HQ on Mac, or the Studio "High" H.264/H.265 export at maximum bitrate on Windows. Avoid the social-media presets.</li>
-            <li><strong>Resolution.</strong> Export at the native stitched resolution (5.7K or 4K). Video Sarayi scales down for Reels; keep it large for YouTube.</li>
-          </ol>
-        </div>
+        <title>Video Sarayi</title>
+    </head>
 
-        <div class="tips-cam">
-          <h3>DJI Osmo Action 6 &rarr; DaVinci Resolve</h3>
-          <ol>
-            <li><strong>Do your edit here.</strong> Cuts, sync to music, trimming — everything creative goes in Resolve.</li>
-            <li><strong>Color profile: keep D-LogM.</strong> Do <em>not</em> apply the DJI D-LogM → Rec.709 LUT in Resolve. Video Sarayi applies it during encoding. Applying it twice destroys contrast.</li>
-            <li><strong>No color grading yet.</strong> Leave the timeline in log. Any exposure or grade adjustments should wait until after encoding, or be handled in a second Resolve pass on the final file.</li>
-            <li><strong>Export codec — depends on stabilization:</strong>
-              <ul style="margin:6px 0 0; padding-left:16px; display:flex; flex-direction:column; gap:5px;">
-                <li><em>Not using Gyroflow:</em> export DNxHR HQ or ProRes 422 HQ. These go straight into FFmpeg with no intermediate re-encode, so lossless-ish quality matters.</li>
-                <li><em>Using Gyroflow:</em> export H.265 at the highest bitrate DaVinci allows (200 Mbps+). Gyroflow will re-encode your file anyway, so ProRes is wasted — a high-bitrate H.265 is just as clean after the intermediate step.</li>
-              </ul>
-            </li>
-            <li><strong>Stabilization.</strong> DaVinci's built-in stabilizer works fine. Alternatively, enable <em>Gyroflow</em> in Video Sarayi (Stabilization section) — it uses the embedded IMU data for smoother results than optical-flow methods.</li>
-            <li><strong>Resolution.</strong> Export at native 4K. Keep the original frame rate.</li>
-          </ol>
-        </div>
-
-      </div>
-    </details>
-
-    <section class="pane" id="pane-inputs">
-      <div class="pane-head">
-        <h2>Paths</h2>
-      </div>
-
-      <label class="field">
-        <span>Input file</span>
-        <div class="path-row">
-          <input id="input-path" type="text" placeholder="Paste a video path or browse for one…" autocomplete="off" spellcheck="false" />
-          <button id="btn-browse-input" class="ghost" type="button">Browse…</button>
-        </div>
-      </label>
-
-      <label class="field">
-        <span>Output file</span>
-        <div class="path-row">
-          <input id="output-path" type="text" placeholder="Leave blank to auto-name inside output/" autocomplete="off" spellcheck="false" />
-          <button id="btn-browse-output" class="ghost" type="button">Browse…</button>
-        </div>
-      </label>
-
-      <label class="field">
-        <span>Resolved output</span>
-        <div id="resolved-output" class="selected path-display">(preview will show the output path)</div>
-      </label>
-
-      <p class="hint">You can paste paths manually or use Browse for native file dialogs.</p>
-      <div id="paths-error" class="error" hidden></div>
-    </section>
-
-    <section class="pane" id="pane-convert">
-      <div class="pane-head">
-        <h2>Convert</h2>
-      </div>
-
-      <label class="field">
-        <span>Selected file</span>
-        <div id="selected-file" class="selected">(choose an input file)</div>
-      </label>
-
-      <div class="cam-plat-row">
-        <label class="field" style="flex:1;margin:0">
-          <span>Camera</span>
-          <select id="camera">
-            <option value="x5">Insta360 X5</option>
-            <option value="a6">DJI Osmo Action 6</option>
-          </select>
-        </label>
-        <label class="field" style="flex:1;margin:0">
-          <span>Target platform</span>
-          <select id="platform">
-            <option value="reel">Instagram Reel</option>
-            <option value="yt">YouTube 4K</option>
-          </select>
-        </label>
-      </div>
-      <!-- derived pipeline id, kept hidden for JS use -->
-      <input type="hidden" id="pipeline" value="x5-reel" />
-
-      <div class="preset-bar">
-        <label class="field" style="flex:1; margin:0;">
-          <span>Preset</span>
-          <select id="preset"></select>
-        </label>
-        <div class="preset-actions">
-          <button id="btn-preset-save-as" class="ghost" title="Save current params as a new preset">Save as…</button>
-          <button id="btn-preset-save" class="ghost" disabled title="Overwrite selected user preset">Save</button>
-          <button id="btn-preset-duplicate" class="ghost">Duplicate</button>
-          <button id="btn-preset-delete" class="ghost" disabled>Delete</button>
-        </div>
-      </div>
-      <div id="preset-description" class="preset-description" hidden></div>
-
-      <div id="params-form" class="params-form"></div>
-
-      <fieldset class="group">
-        <legend>
-          <label><input type="checkbox" id="override-toggle" /> Edit ffmpeg command directly</label>
-        </legend>
-        <textarea id="argv-override" class="raw" rows="14" hidden placeholder="One argv token per line…"></textarea>
-        <pre id="argv-preview" class="argv"></pre>
-      </fieldset>
-
-      <button id="btn-convert" class="primary" disabled>Convert</button>
-      <div id="convert-error" class="error" hidden></div>
-    </section>
-
-    <section class="pane pane-wide" id="pane-jobs">
-      <div class="pane-head">
-        <h2>Jobs</h2>
-      </div>
-      <ul id="job-list" class="job-list"></ul>
-    </section>
-  </main>
-
-  <script src="/static/app.js"></script>
-</body>
+    <body class="size-full bg-primary antialiased">
+        <div id="root"></div>
+        <script type="module" src="/src/main.tsx"></script>
+        <script>
+            // On page load or when changing themes, best to add inline in `head` to avoid FOUC
+            if (localStorage.theme === "dark" || (!("theme" in localStorage) && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+                document.documentElement.classList.add("dark-mode");
+            } else {
+                document.documentElement.classList.remove("dark-mode");
+            }
+        </script>
+    </body>
 </html>
