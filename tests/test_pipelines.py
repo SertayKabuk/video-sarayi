@@ -179,6 +179,66 @@ def test_faststart_omitted_when_false(ctx):
     assert "+faststart" not in argv
 
 
+# ── rotate / flip ───────────────────────────────────────────────────────────
+
+def test_rotate_default_omitted(ctx):
+    vf = _vf(build("a6-reel", get_defaults("a6-reel"), ctx))
+    assert "transpose=" not in vf
+    assert ", hflip" not in vf and ", vflip" not in vf
+
+def test_rotate_90cw(ctx):
+    p = get_defaults("a6-reel").merge({"rotate": "90cw"})
+    vf = _vf(build("a6-reel", p, ctx))
+    assert "transpose=1" in vf
+
+def test_rotate_90ccw(ctx):
+    p = get_defaults("a6-reel").merge({"rotate": "90ccw"})
+    vf = _vf(build("a6-reel", p, ctx))
+    assert "transpose=2" in vf
+
+def test_rotate_180(ctx):
+    p = get_defaults("a6-reel").merge({"rotate": "180"})
+    vf = _vf(build("a6-reel", p, ctx))
+    assert "transpose=2,transpose=2" in vf
+
+def test_rotate_applied_before_crop(ctx):
+    p = get_defaults("a6-reel").merge({"rotate": "90cw"})
+    vf = _vf(build("a6-reel", p, ctx))
+    assert vf.index("transpose=1") < vf.index("crop=")
+
+def test_rotate_unknown_value_ignored(ctx):
+    p = get_defaults("a6-reel").merge({"rotate": "bogus"})
+    vf = _vf(build("a6-reel", p, ctx))
+    assert "transpose=" not in vf
+
+
+# ── test-render windowing (-ss / -t) ────────────────────────────────────────
+
+def test_no_windowing_by_default(ctx):
+    argv = build("a6-reel", get_defaults("a6-reel"), ctx)
+    assert "-ss" not in argv
+    assert "-t" not in argv
+
+def test_start_s_emits_ss_before_input(ctx):
+    ctx.start_s = 12.5
+    argv = build("a6-reel", get_defaults("a6-reel"), ctx)
+    assert argv.index("-ss") < argv.index("-i")
+    assert argv[argv.index("-ss") + 1] == "12.5"
+
+def test_duration_s_emits_t_after_input(ctx):
+    ctx.duration_s = 30.0
+    argv = build("a6-reel", get_defaults("a6-reel"), ctx)
+    assert argv.index("-i") < argv.index("-t")
+    assert argv[argv.index("-t") + 1] == "30"
+
+def test_windowing_combined(ctx):
+    ctx.start_s = 0.0
+    ctx.duration_s = 45.25
+    argv = build("a6-yt", get_defaults("a6-yt"), ctx)
+    assert argv[argv.index("-ss") + 1] == "0"
+    assert argv[argv.index("-t") + 1] == "45.25"
+
+
 # ── LUT path quoting ────────────────────────────────────────────────────────
 
 def test_lut_path_single_quoted_and_drive_colon_escaped(ctx):

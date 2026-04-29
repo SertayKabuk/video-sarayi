@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import subprocess
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +27,7 @@ from .pipelines import (
     PIPELINE_IDS,
     PipelineId,
     PipelineParams,
+    _lut_path_for_filter,
     build,
     encoder_family,
     get_defaults,
@@ -66,8 +69,36 @@ class JobIn(BaseModel):
     argv_override: list[str] | None = None
 
 
+class TestRenderIn(BaseModel):
+    file: str | None = None
+    input_path: str | None = None
+    pipeline: str
+    params: dict[str, Any] | None = None
+    start_s: float = Field(default=0.0, ge=0)
+    duration_s: float = Field(default=30.0, gt=0, le=600)
+
+
 class OutputDialogIn(BaseModel):
     suggested_path: str | None = None
+
+
+class ConcatIn(BaseModel):
+    input_paths: list[str] = Field(min_length=2)
+    output_path: str | None = None
+
+
+class RotateIn(BaseModel):
+    input_path: str
+    output_path: str | None = None
+    rotation: Literal[90, 180, 270]
+
+
+class LutIn(BaseModel):
+    input_path: str
+    output_path: str | None = None
+    lut: Literal["x5", "dji", "custom"]
+    lut_path: str | None = None
+    interp: Literal["tetrahedral", "trilinear", "nearest"] = "tetrahedral"
 
 
 class PresetCreateIn(BaseModel):
@@ -258,6 +289,60 @@ def _run_dialog_macos(kind: Literal["input", "output"], suggested_path: str | No
     return path or None
 
 
+def _run_dialog_multi_input_macos(default_dir: Path) -> list[str]:
+    initialdir = str(default_dir)
+    initialdir_esc = initialdir.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        f'set theFiles to choose file with prompt "Select input videos" '
+        f'with multiple selections allowed '
+        f'default location (POSIX file "{initialdir_esc}")\n'
+        f'set out to ""\n'
+        f'repeat with f in theFiles\n'
+        f'    set out to out & POSIX path of f & "\\n"\n'
+        f'end repeat\n'
+        f'return out'
+    )
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    if result.returncode != 0:
+        if "User canceled" in result.stderr or "-128" in result.stderr:
+            return []
+        raise RuntimeError(result.stderr.strip() or "file dialog failed")
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _run_dialog_multi_input(default_dir: Path) -> list[str]:
+    if sys.platform == "darwin":
+        return _run_dialog_multi_input_macos(default_dir)
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise RuntimeError("native file dialogs are unavailable in this Python environment") from exc
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        paths = filedialog.askopenfilenames(
+            title="Select input videos",
+            initialdir=str(default_dir),
+            filetypes=[
+                ("Video files", "*.mp4 *.mov *.mkv *.avi *.insv *.webm *.m4v *.ts *.mxf"),
+                ("All files", "*.*"),
+            ],
+        )
+        return list(paths) if paths else []
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
 def _run_dialog(kind: Literal["input", "output"], suggested_path: str | None, default_dir: Path) -> str | None:
     if sys.platform == "darwin":
         return _run_dialog_macos(kind, suggested_path, default_dir)
@@ -375,6 +460,322 @@ async def create_job(body: JobIn) -> dict:
     return job.serialize()
 
 
+async def _probe_display_rotation(ffprobe: str, path: Path) -> float:
+    """Return the input's display-matrix rotation in CCW degrees, or 0 if none."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffprobe, "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream_side_data=rotation",
+            "-of", "json", str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return 0.0
+    out, _err = await proc.communicate()
+    try:
+        data = json.loads(out.decode())
+    except (ValueError, UnicodeDecodeError):
+        return 0.0
+    for stream in data.get("streams") or []:
+        for sd in stream.get("side_data_list") or []:
+            rot = sd.get("rotation")
+            if rot is not None:
+                try:
+                    return float(rot)
+                except (TypeError, ValueError):
+                    pass
+    return 0.0
+
+
+def _disambiguate_path(directory: Path, base: str, ext: str) -> Path:
+    """`<directory>/<base><ext>`, with `_1`, `_2`, ... suffixes if taken."""
+    candidate = directory / f"{base}{ext}"
+    i = 1
+    while candidate.exists():
+        candidate = directory / f"{base}_{i}{ext}"
+        i += 1
+    return candidate
+
+
+@app.post("/api/test-render")
+async def create_test_render(body: TestRenderIn) -> dict:
+    pid = _validate_pipeline(body.pipeline)
+    config: cfg.Config = app.state.config
+    if not (body.file and body.file.strip()) and not (body.input_path and body.input_path.strip()):
+        raise HTTPException(400, "input file path is required")
+    manager: JobManager = app.state.manager
+    try:
+        resolved_input = resolve_input_path(
+            config,
+            file_name=body.file,
+            input_path=body.input_path,
+            strict=True,
+        )
+    except FileNotFoundError:
+        missing = body.input_path or body.file or "input file"
+        raise HTTPException(404, f"input file not found: {missing}")
+
+    test_output = _disambiguate_path(
+        config.output_dir, f"{resolved_input.stem}__{pid}__test", ".mp4",
+    )
+    test_output.parent.mkdir(parents=True, exist_ok=True)
+    test_job = manager.submit(
+        resolved_input,
+        pid,
+        body.params,
+        output_path=test_output,
+        start_s=body.start_s,
+        test_duration_s=body.duration_s,
+    )
+
+    orig_output = _disambiguate_path(
+        config.output_dir, f"{resolved_input.stem}__original__test", ".mp4",
+    )
+    orig_argv = [
+        config.ffmpeg, "-hide_banner", "-y",
+        "-ss", f"{body.start_s:.3f}",
+        "-i", str(resolved_input),
+        "-t", f"{body.duration_s:.3f}",
+        "-c", "copy",
+        "-movflags", "+faststart",
+        "-progress", "pipe:1", "-nostats",
+        str(orig_output),
+    ]
+    orig_job = manager.submit(
+        resolved_input,
+        pid,
+        body.params,
+        argv_override=orig_argv,
+        output_path=orig_output,
+        start_s=body.start_s,
+        test_duration_s=body.duration_s,
+    )
+
+    return {"test_job": test_job.serialize(), "original_job": orig_job.serialize()}
+
+
+def _write_concat_list(paths: list[Path], output_dir: Path, job_tag: str) -> Path:
+    """Write FFmpeg concat-demuxer list file. Single quotes in paths are
+    escaped per https://trac.ffmpeg.org/wiki/Concatenate ('\\'')."""
+    list_path = output_dir / f".concat_{job_tag}.txt"
+    list_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for p in paths:
+        escaped = str(p).replace("'", r"'\''")
+        lines.append(f"file '{escaped}'\n")
+    list_path.write_text("".join(lines), encoding="utf-8")
+    return list_path
+
+
+@app.post("/api/jobs/concat")
+async def create_concat_job(body: ConcatIn) -> dict:
+    config: cfg.Config = app.state.config
+    manager: JobManager = app.state.manager
+
+    resolved_inputs: list[Path] = []
+    for raw in body.input_paths:
+        if not raw or not raw.strip():
+            raise HTTPException(400, "input paths must not be empty")
+        try:
+            resolved = resolve_input_path(config, input_path=raw, strict=True)
+        except FileNotFoundError:
+            raise HTTPException(404, f"input file not found: {raw}")
+        resolved_inputs.append(resolved)
+
+    # Output path: use given path, else auto-name beside output_dir using the
+    # first input's stem.
+    raw_out = (body.output_path or "").strip()
+    if raw_out:
+        # Treat trailing slash or existing dir as "put auto-named file in here".
+        candidate = Path(raw_out).expanduser()
+        if not candidate.is_absolute():
+            candidate = config.repo_root / candidate
+        candidate = candidate.resolve()
+        if raw_out.endswith(("/", "\\")) or (candidate.exists() and candidate.is_dir()):
+            output_path = _disambiguate_path(candidate, f"{resolved_inputs[0].stem}__joined", ".mp4")
+        else:
+            output_path = candidate
+    else:
+        output_path = _disambiguate_path(
+            config.output_dir, f"{resolved_inputs[0].stem}__joined", ".mp4",
+        )
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(400, f"output path is not usable: {exc}")
+
+    job_tag = uuid.uuid4().hex[:8]
+    list_file = _write_concat_list(resolved_inputs, output_path.parent, job_tag)
+
+    argv = [
+        config.ffmpeg, "-hide_banner", "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", str(list_file),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        "-progress", "pipe:1", "-nostats",
+        str(output_path),
+    ]
+    job = manager.submit(
+        resolved_inputs,
+        "join",
+        argv_override=argv,
+        output_path=output_path,
+        cleanup_paths=[list_file],
+    )
+    return job.serialize()
+
+
+@app.post("/api/jobs/rotate")
+async def create_rotate_job(body: RotateIn) -> dict:
+    config: cfg.Config = app.state.config
+    manager: JobManager = app.state.manager
+
+    if not body.input_path or not body.input_path.strip():
+        raise HTTPException(400, "input file path is required")
+    try:
+        resolved_input = resolve_input_path(config, input_path=body.input_path, strict=True)
+    except FileNotFoundError:
+        raise HTTPException(404, f"input file not found: {body.input_path}")
+
+    raw_out = (body.output_path or "").strip()
+    if raw_out:
+        candidate = Path(raw_out).expanduser()
+        if not candidate.is_absolute():
+            candidate = config.repo_root / candidate
+        candidate = candidate.resolve()
+        if raw_out.endswith(("/", "\\")) or (candidate.exists() and candidate.is_dir()):
+            output_path = _disambiguate_path(
+                candidate, f"{resolved_input.stem}__rot{body.rotation}", resolved_input.suffix or ".mp4",
+            )
+        else:
+            output_path = candidate
+    else:
+        output_path = _disambiguate_path(
+            config.output_dir,
+            f"{resolved_input.stem}__rot{body.rotation}",
+            resolved_input.suffix or ".mp4",
+        )
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(400, f"output path is not usable: {exc}")
+
+    # Lossless rotation via display matrix side data. `-display_rotation` is
+    # an INPUT option (FFmpeg 7+) that REPLACES (not adds to) any existing
+    # rotation in CCW degrees. To make the button act as a delta — "rotate the
+    # displayed video by N° CW" — we probe the input's current rotation and
+    # subtract `body.rotation` (CW) from it.
+    # Map only video+audio: DJI clips carry a `tmcd` timecode data stream that
+    # the mp4 muxer refuses to write under "codec=none".
+    existing_rotation = await _probe_display_rotation(config.ffprobe, resolved_input)
+    display_rotation = (existing_rotation - body.rotation) % 360
+    argv = [
+        config.ffmpeg, "-hide_banner", "-y",
+        "-display_rotation:v:0", str(display_rotation),
+        "-i", str(resolved_input),
+        "-map", "0:v",
+        "-map", "0:a?",
+        "-c", "copy",
+        "-movflags", "+faststart",
+        "-progress", "pipe:1", "-nostats",
+        str(output_path),
+    ]
+    job = manager.submit(
+        resolved_input,
+        "rotate",
+        argv_override=argv,
+        output_path=output_path,
+    )
+    return job.serialize()
+
+
+@app.post("/api/jobs/lut")
+async def create_lut_job(body: LutIn) -> dict:
+    config: cfg.Config = app.state.config
+    manager: JobManager = app.state.manager
+
+    if not body.input_path or not body.input_path.strip():
+        raise HTTPException(400, "input file path is required")
+    try:
+        resolved_input = resolve_input_path(config, input_path=body.input_path, strict=True)
+    except FileNotFoundError:
+        raise HTTPException(404, f"input file not found: {body.input_path}")
+
+    if body.lut == "x5":
+        lut_path = config.x5_lut
+    elif body.lut == "dji":
+        lut_path = config.dji_lut
+    else:
+        if not body.lut_path or not body.lut_path.strip():
+            raise HTTPException(400, "lut_path is required when lut='custom'")
+        lut_path = Path(body.lut_path).expanduser()
+        if not lut_path.is_absolute():
+            lut_path = config.repo_root / lut_path
+        lut_path = lut_path.resolve()
+    if not lut_path.exists() or not lut_path.is_file():
+        raise HTTPException(404, f"LUT file not found: {lut_path}")
+
+    raw_out = (body.output_path or "").strip()
+    suffix = resolved_input.suffix or ".mp4"
+    if raw_out:
+        candidate = Path(raw_out).expanduser()
+        if not candidate.is_absolute():
+            candidate = config.repo_root / candidate
+        candidate = candidate.resolve()
+        if raw_out.endswith(("/", "\\")) or (candidate.exists() and candidate.is_dir()):
+            output_path = _disambiguate_path(
+                candidate, f"{resolved_input.stem}__lut", suffix,
+            )
+        else:
+            output_path = candidate
+    else:
+        output_path = _disambiguate_path(
+            config.output_dir, f"{resolved_input.stem}__lut", suffix,
+        )
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(400, f"output path is not usable: {exc}")
+
+    pix_fmt = "yuv420p10le"
+    vf = (
+        f"format={pix_fmt}, "
+        f"lut3d=file={_lut_path_for_filter(lut_path)}:interp={body.interp}, "
+        f"format={pix_fmt}"
+    )
+    argv = [
+        config.ffmpeg, "-hide_banner", "-y",
+        "-i", str(resolved_input),
+        "-vf", vf,
+        "-c:v", "libx265",
+        "-preset", "slow",
+        "-profile:v", "main10",
+        "-pix_fmt", pix_fmt,
+        "-x265-params", "crf=18",
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
+        "-colorspace", "bt709",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        "-progress", "pipe:1", "-nostats",
+        str(output_path),
+    ]
+    job = manager.submit(
+        resolved_input,
+        "lut",
+        params={"lut": body.lut, "lut_path": str(lut_path), "interp": body.interp},
+        argv_override=argv,
+        output_path=output_path,
+    )
+    return job.serialize()
+
+
 @app.post("/api/dialogs/input")
 async def pick_input_dialog() -> dict:
     config: cfg.Config = app.state.config
@@ -383,6 +784,16 @@ async def pick_input_dialog() -> dict:
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
     return {"path": path}
+
+
+@app.post("/api/dialogs/input-multi")
+async def pick_input_multi_dialog() -> dict:
+    config: cfg.Config = app.state.config
+    try:
+        paths = await asyncio.to_thread(_run_dialog_multi_input, config.input_dir)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    return {"paths": paths}
 
 
 @app.post("/api/dialogs/output")

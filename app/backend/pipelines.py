@@ -75,6 +75,10 @@ class PipelineParams:
     crop_enabled: bool = False
     crop_expr: str = "ih*(9/16):ih"
 
+    # --- rotate / flip (applied before crop so crop expressions see rotated dims) ---
+    # "none" | "90cw" | "90ccw" | "180" | "hflip" | "vflip"
+    rotate: str = "none"
+
     # --- lut3d ---
     lut_enabled: bool = True
     lut_interp: str = "tetrahedral"
@@ -183,6 +187,11 @@ class BuildContext:
     dji_lut: Path
     ffmpeg: str = "ffmpeg"
     extra_global: list[str] = field(default_factory=lambda: ["-hide_banner", "-y"])
+    # Test-render windowing. start_s emits "-ss <start>" before "-i" (fast
+    # keyframe seek). duration_s emits "-t <duration>" after the input so output
+    # is capped to that length. Both None = no windowing (full clip).
+    start_s: float | None = None
+    duration_s: float | None = None
 
 
 # -- filter quoting ----------------------------------------------------------
@@ -202,6 +211,18 @@ def _lut_path_for_filter(p: Path) -> str:
     return f"'{escaped}'"
 
 
+def _fmt_seconds(value: float) -> str:
+    """Format a float seconds value for FFmpeg `-ss`/`-t` flags.
+
+    Uses 3-decimal precision (millisecond) and strips trailing zeros so
+    integer seconds render as "30" rather than "30.000".
+    """
+    text = f"{value:.3f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def _v360(p: PipelineParams) -> str:
     return (
         f"v360=input=e:output=rectilinear"
@@ -213,6 +234,15 @@ def _v360(p: PipelineParams) -> str:
 
 # -- core builder ------------------------------------------------------------
 
+_ROTATE_FILTERS: dict[str, str] = {
+    "90cw": "transpose=1",
+    "90ccw": "transpose=2",
+    "180": "transpose=2,transpose=2",
+    "hflip": "hflip",
+    "vflip": "vflip",
+}
+
+
 def build(pipeline: PipelineId, params: PipelineParams, ctx: BuildContext) -> list[str]:
     vf_parts: list[str] = []
     if params.fps_enabled and params.fps_value > 0:
@@ -220,6 +250,8 @@ def build(pipeline: PipelineId, params: PipelineParams, ctx: BuildContext) -> li
     if uses_v360(pipeline) and params.v360_enabled:
         vf_parts.append(_v360(params))
     vf_parts.append(f"format={params.pix_fmt}")
+    if params.rotate in _ROTATE_FILTERS:
+        vf_parts.append(_ROTATE_FILTERS[params.rotate])
     if params.crop_enabled:
         vf_parts.append(f"crop={params.crop_expr}")
     if params.lut_enabled:
@@ -230,11 +262,12 @@ def build(pipeline: PipelineId, params: PipelineParams, ctx: BuildContext) -> li
     vf_parts.append(f"format={params.pix_fmt}")
     filter_args = ["-vf", ", ".join(vf_parts)]
 
-    argv: list[str] = [
-        ctx.ffmpeg, *ctx.extra_global,
-        "-i", str(ctx.input_path),
-        *filter_args,
-    ]
+    argv: list[str] = [ctx.ffmpeg, *ctx.extra_global]
+    if ctx.start_s is not None:
+        argv += ["-ss", _fmt_seconds(ctx.start_s)]
+    argv += ["-i", str(ctx.input_path), *filter_args]
+    if ctx.duration_s is not None:
+        argv += ["-t", _fmt_seconds(ctx.duration_s)]
 
     if encoder_family(pipeline) == "x265":
         x265_parts = [

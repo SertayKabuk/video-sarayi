@@ -15,7 +15,7 @@ from . import config as cfg
 from .pathing import output_url_for_path
 from .pipelines import (
     BuildContext,
-    PipelineId,
+    PIPELINE_IDS,
     PipelineParams,
     build,
     get_defaults,
@@ -43,7 +43,7 @@ class Job:
     input_path: Path
     output_path: Path
     output_url: str | None
-    pipeline: PipelineId
+    pipeline: str
     params: dict[str, Any]
     argv_override: list[str] | None = None
     argv: list[str] = field(default_factory=list)
@@ -56,12 +56,23 @@ class Job:
     total_frames: int | None = None
     error: str | None = None
     stderr_tail: list[str] = field(default_factory=list)
+    # Test-render window — when set, the encoder seeks to start_s and caps
+    # output to test_duration_s. Independent from `duration_s` (which is the
+    # probed source duration used for percent-progress math).
+    start_s: float | None = None
+    test_duration_s: float | None = None
+    # Multi-input jobs (concat/join) carry the full ordered list here;
+    # `input_path` is the first entry for display compatibility.
+    input_paths: list[Path] | None = None
+    # Files to remove after the worker finishes (e.g. concat list files).
+    cleanup_paths: list[Path] = field(default_factory=list)
 
     def serialize(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "input": self.input_path.name,
             "input_path": str(self.input_path),
+            "input_paths": [str(p) for p in self.input_paths] if self.input_paths else None,
             "output": self.output_path.name,
             "output_path": str(self.output_path),
             "output_url": self.output_url,
@@ -75,6 +86,8 @@ class Job:
             "speed": self.speed,
             "duration_s": self.duration_s,
             "error": self.error,
+            "start_s": self.start_s,
+            "test_duration_s": self.test_duration_s,
         }
 
 
@@ -139,32 +152,62 @@ class JobManager:
 
     def submit(
         self,
-        input_path: Path,
-        pipeline: PipelineId,
-        params: dict[str, Any] | None,
+        input_path: Path | list[Path],
+        pipeline: str,
+        params: dict[str, Any] | None = None,
         argv_override: list[str] | None = None,
         *,
         output_path: Path | None = None,
+        start_s: float | None = None,
+        test_duration_s: float | None = None,
+        cleanup_paths: list[Path] | None = None,
     ) -> Job:
-        input_path = input_path.expanduser().resolve()
-        if not input_path.exists() or not input_path.is_file():
-            raise FileNotFoundError(str(input_path))
+        """Submit a job. Accepts a single input or an ordered list (concat).
+        For known pipeline ids, params overlay the pipeline defaults and the
+        argv is built lazily by the worker; for non-pipeline kinds (e.g.
+        "join", "rotate") an argv_override and explicit output_path are
+        required."""
+        if isinstance(input_path, list):
+            if not input_path:
+                raise ValueError("input_path list must not be empty")
+            resolved = [p.expanduser().resolve() for p in input_path]
+        else:
+            resolved = [input_path.expanduser().resolve()]
+        for p in resolved:
+            if not p.exists() or not p.is_file():
+                raise FileNotFoundError(str(p))
+        primary = resolved[0]
 
-        output_path = (
-            output_path.expanduser().resolve()
-            if output_path is not None
-            else resolve_output_path(self.config.output_dir, input_path, pipeline).resolve()
-        )
+        is_pipeline = pipeline in PIPELINE_IDS
+        if output_path is not None:
+            output_path = output_path.expanduser().resolve()
+        elif is_pipeline:
+            output_path = resolve_output_path(
+                self.config.output_dir, primary, pipeline,  # type: ignore[arg-type]
+            ).resolve()
+        else:
+            raise ValueError(f"output_path is required for non-pipeline jobs ({pipeline})")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        merged = get_defaults(pipeline).merge(params).to_dict()
+
+        if is_pipeline:
+            merged = get_defaults(pipeline).merge(params).to_dict()  # type: ignore[arg-type]
+        else:
+            if not argv_override:
+                raise ValueError(f"argv_override is required for non-pipeline jobs ({pipeline})")
+            merged = dict(params) if params else {}
+
         job = Job(
             id=uuid.uuid4().hex[:12],
-            input_path=input_path,
+            input_path=primary,
             output_path=output_path,
             output_url=output_url_for_path(self.config, output_path),
             pipeline=pipeline,
             params=merged,
             argv_override=list(argv_override) if argv_override else None,
+            input_paths=resolved if len(resolved) > 1 else None,
+            cleanup_paths=list(cleanup_paths) if cleanup_paths else [],
+            start_s=start_s,
+            test_duration_s=test_duration_s,
         )
         state = _JobState(job)
         self.states[job.id] = state
@@ -321,8 +364,16 @@ class JobManager:
 
     async def _run_job(self, state: _JobState) -> None:
         job = state.job
-        job.duration_s = await self._probe_duration(job.input_path)
-        job.total_frames = await self._probe_total_frames(job.input_path, job.duration_s)
+        if job.input_paths and len(job.input_paths) > 1:
+            # For multi-input jobs (concat), sum component durations so the
+            # progress percent reflects the joined output's runtime.
+            durations = [await self._probe_duration(p) for p in job.input_paths]
+            if all(d is not None for d in durations):
+                job.duration_s = sum(durations)  # type: ignore[arg-type]
+            job.total_frames = None
+        else:
+            job.duration_s = await self._probe_duration(job.input_path)
+            job.total_frames = await self._probe_total_frames(job.input_path, job.duration_s)
 
         gyroflow_tmp: Path | None = None
         ffmpeg_input = job.input_path
@@ -345,8 +396,14 @@ class JobManager:
                 x5_lut=self.config.x5_lut,
                 dji_lut=self.config.dji_lut,
                 ffmpeg=self.config.ffmpeg,
+                start_s=job.start_s,
+                duration_s=job.test_duration_s,
             )
             job.argv = build(job.pipeline, params, ctx)
+            if job.test_duration_s is not None:
+                # Progress math should match the windowed encode, not the source clip.
+                job.duration_s = job.test_duration_s
+                job.total_frames = None
         else:
             job.argv = list(job.argv_override)
 
@@ -368,6 +425,8 @@ class JobManager:
 
         if gyroflow_tmp:
             _safe_unlink(gyroflow_tmp)
+        for tmp in job.cleanup_paths:
+            _safe_unlink(tmp)
 
         if state.cancel_requested:
             job.status = Status.CANCELED

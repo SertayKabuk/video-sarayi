@@ -6,6 +6,7 @@ import { ConvertButton } from "./convert-button";
 import { ParamsForm } from "./params-form";
 import { PresetBar } from "./preset-bar";
 import { PresetDescription } from "./preset-description";
+import { TestRenderPanel } from "./test-render-panel";
 
 export function ConvertPanel() {
     const { state } = useAppContext();
@@ -31,6 +32,7 @@ export function ConvertPanel() {
             <PresetDescription />
             <ParamsForm />
             <ArgvOverride />
+            <TestRenderPanel />
             <ConvertButton />
         </section>
     );

@@ -2,11 +2,13 @@ import type { PipelineTraits } from "@/types/api";
 
 export type FieldType = "checkbox" | "select" | "number" | "text";
 
+export type SelectOption = string | { label: string; value: string };
+
 export interface ParamField {
     key: string;
     label: string;
     type: FieldType;
-    options?: string[];
+    options?: SelectOption[];
     step?: number;
     min?: number;
     max?: number;
@@ -48,6 +50,27 @@ export const PARAM_GROUPS: ParamGroup[] = [
         ],
     },
     {
+        label: "Rotate / Flip",
+        grid: "cols-2",
+        fields: [
+            {
+                key: "rotate",
+                label: "Rotation",
+                type: "select",
+                wide: true,
+                options: [
+                    { label: "None", value: "none" },
+                    { label: "Rotate 90° clockwise", value: "90cw" },
+                    { label: "Rotate 90° counter-clockwise", value: "90ccw" },
+                    { label: "Rotate 180°", value: "180" },
+                    { label: "Flip horizontally (mirror)", value: "hflip" },
+                    { label: "Flip vertically", value: "vflip" },
+                ],
+                hint: "Use 90° rotations when the camera was held sideways. Applied before crop, so crop sees the rotated frame.",
+            },
+        ],
+    },
+    {
         label: "Crop (DJI Action 6)",
         when: (t) => t.lut === "dji",
         grid: "cols-2",
@@ -60,9 +83,13 @@ export const PARAM_GROUPS: ParamGroup[] = [
             },
             {
                 key: "crop_expr",
-                label: "Crop expression",
-                type: "text",
-                hint: "9:16 vertical: ih*(9/16):ih   16:9 from square: iw:iw*(9/16)",
+                label: "Orientation",
+                type: "select",
+                options: [
+                    { label: "Vertical 9:16 (portrait footage)", value: "ih*(9/16):ih" },
+                    { label: "Horizontal 16:9 (landscape footage)", value: "iw:iw*(9/16)" },
+                ],
+                hint: "Pick Horizontal when the source was recorded in landscape — keeps the framing right-side up.",
             },
         ],
     },

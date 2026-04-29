@@ -50,6 +50,9 @@ const PIPELINE_LABELS: Record<string, string> = {
     "x5-yt": "X5 → YouTube",
     "a6-reel": "A6 → Reel",
     "a6-yt": "A6 → YouTube",
+    join: "Join (concat, no re-encode)",
+    rotate: "Rotate",
+    lut: "LUT (apply 3D LUT)",
 };
 
 interface CancelButtonProps {
@@ -139,9 +142,19 @@ export function JobCard({ job }: { job: Job }) {
             {/* Paths */}
             <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 px-4 py-3">
                 <span className="mt-0.5 text-[11px] font-medium uppercase tracking-widest text-tertiary">In</span>
-                <span className="break-all font-mono text-[11px] text-secondary" title={job.input_path || job.input}>
-                    {job.input_path || job.input}
-                </span>
+                {job.input_paths && job.input_paths.length > 1 ? (
+                    <ol className="flex flex-col gap-0.5">
+                        {job.input_paths.map((p, i) => (
+                            <li key={`${p}:${i}`} className="break-all font-mono text-[11px] text-secondary" title={p}>
+                                <span className="text-tertiary">{i + 1}.</span> {p}
+                            </li>
+                        ))}
+                    </ol>
+                ) : (
+                    <span className="break-all font-mono text-[11px] text-secondary" title={job.input_path || job.input}>
+                        {job.input_path || job.input}
+                    </span>
+                )}
                 <span className="mt-0.5 text-[11px] font-medium uppercase tracking-widest text-tertiary">Out</span>
                 <span className={cx("break-all font-mono text-[11px]", isDone ? "text-success-700 dark:text-success-400" : "text-secondary")} title={job.output_path || job.output}>
                     {job.output_path || job.output}

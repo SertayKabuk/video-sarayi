@@ -1,4 +1,4 @@
-import { cancelJob, createJob, fetchJobs } from "@/api/jobs";
+import { cancelJob, createJob, createTestRender, fetchJobs } from "@/api/jobs";
 import type { Job } from "@/types/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -19,10 +19,15 @@ export function useJobs() {
         onSuccess: invalidate,
     });
 
+    const testRenderMutation = useMutation({
+        mutationFn: createTestRender,
+        onSuccess: invalidate,
+    });
+
     const cancelMutation = useMutation({
         mutationFn: cancelJob,
         onSuccess: invalidate,
     });
 
-    return { ...query, jobs, submitMutation, cancelMutation, queryClient };
+    return { ...query, jobs, submitMutation, testRenderMutation, cancelMutation, queryClient };
 }

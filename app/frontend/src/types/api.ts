@@ -27,13 +27,16 @@ export interface Preset {
     description?: string;
 }
 
+export type JobKind = PipelineId | "join" | "rotate" | "lut";
+
 export interface Job {
     id: string;
     status: JobStatus;
-    pipeline: PipelineId;
+    pipeline: JobKind;
     input: string;
     output: string;
     input_path: string;
+    input_paths?: string[] | null;
     output_path: string;
     percent: number | null;
     frame: number | null;
@@ -42,6 +45,15 @@ export interface Job {
     duration_s: number | null;
     error: string | null;
     output_url: string | null;
+    start_s?: number | null;
+    test_duration_s?: number | null;
+}
+
+export type Rotation = 90 | 180 | 270;
+
+export interface TestRenderResponse {
+    test_job: Job;
+    original_job: Job;
 }
 
 export interface HealthCheck {

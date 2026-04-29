@@ -52,9 +52,11 @@ export function ParamFieldCell({ field }: Props) {
                             onChange={(e) => onChange(e.target.value)}
                             className={inputClass}
                         >
-                            {field.options?.map((opt) => (
-                                <option key={opt} value={opt}>{opt}</option>
-                            ))}
+                            {field.options?.map((opt) => {
+                                const value = typeof opt === "string" ? opt : opt.value;
+                                const label = typeof opt === "string" ? opt : opt.label;
+                                return <option key={value} value={value}>{label}</option>;
+                            })}
                         </select>
                     ) : (
                         <input
